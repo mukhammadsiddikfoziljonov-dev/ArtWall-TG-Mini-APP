@@ -22,7 +22,7 @@ The Neon project has separate `development` and `production` branches. All schem
    - `TELEGRAM_BOT_TOKEN`: token issued by BotFather.
    - `ADMIN_TELEGRAM_IDS`: comma-separated numeric Telegram IDs.
    - `STORAGE_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_REGION`: production branch Object Storage values.
-4. Deploy. Render runs checks, applies versioned migrations, then starts the service.
+4. Deploy. Render runs checks, then the start command applies versioned migrations before starting the service. The migration runner is idempotent, which makes this safe on free instances that do not support a separate pre-deploy command.
 5. Verify `https://<service>.onrender.com/api/health` returns `{"ok":true,"database":"connected"}`.
 
 Secrets stay in Render and Neon; do not add them to GitHub. Render creates `SESSION_SECRET` automatically.

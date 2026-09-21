@@ -5,11 +5,9 @@ services:
     plan: free
     region: frankfurt
     buildCommand: npm ci && npm run check
-    preDeployCommand: npm run db:migrate
-    startCommand: npm start
+    startCommand: npm run db:migrate && npm start
     healthCheckPath: /api/health
     autoDeployTrigger: commit
-    maxShutdownDelaySeconds: 30
     envVars:
       - key: NODE_ENV
         value: production
