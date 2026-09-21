@@ -53,8 +53,9 @@ export function AdminDashboard({ onBack }: { onBack: () => void }) {
       </section>
       <section className="mt-7">
         <div className="mb-3 flex items-center justify-between"><h2 className="font-serif text-2xl">Artist capacity</h2><span className="text-xs text-stone-400">{metrics.artists.length} artists</span></div>
-        <div className="space-y-2">{metrics.artists.map((artist) => { const count = state.artworks.filter((artwork) => artwork.artistId === artist.id).length; return <div key={artist.id} className="rounded-2xl bg-white p-4"><div className="flex justify-between text-sm"><strong>{artist.name}</strong><span>{count}/7</span></div><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-stone-100"><div className="h-full rounded-full bg-[#667b6e]" style={{ width: `${(count / 7) * 100}%` }} /></div></div>; })}</div>
+        <div className="space-y-2">{metrics.artists.map((artist) => { const count = state.artworks.filter((artwork) => artwork.artistId === artist.id).length; return <div key={artist.id} className="rounded-2xl bg-white p-4"><div className="flex justify-between text-sm"><strong>{artist.name}</strong><span>{count}/5</span></div><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-stone-100"><div className="h-full rounded-full bg-[#667b6e]" style={{ width: `${(count / 5) * 100}%` }} /></div></div>; })}</div>
       </section>
     </div>
   );
 }
+

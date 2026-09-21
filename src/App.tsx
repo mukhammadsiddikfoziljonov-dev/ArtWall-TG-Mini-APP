@@ -53,7 +53,7 @@ export default function App() {
             <p className="mt-3 text-sm leading-6 text-stone-500">Your Telegram account is ready. Artists can still browse and collect art.</p>
             <div className="mt-6 space-y-3">
               <button onClick={() => { chooseRole("buyer"); localStorage.setItem("artwall-onboarding-complete", "1"); setNeedsOnboarding(false); }} className="menu-row !p-4"><span className="menu-icon bg-[#dfe9df]"><ShoppingBag size={20} /></span><span className="flex-1 text-left"><strong>Continue as buyer</strong><small>Discover, visualize, like and collect artworks</small></span></button>
-              <button onClick={() => { chooseRole("artist"); localStorage.setItem("artwall-onboarding-complete", "1"); setNeedsOnboarding(false); }} className="menu-row !p-4"><span className="menu-icon bg-[#e7ded0]"><Palette size={20} /></span><span className="flex-1 text-left"><strong>Join as artist</strong><small>Build a profile and publish up to seven artworks</small></span></button>
+              <button onClick={() => { chooseRole("artist"); localStorage.setItem("artwall-onboarding-complete", "1"); setNeedsOnboarding(false); }} className="menu-row !p-4"><span className="menu-icon bg-[#e7ded0]"><Palette size={20} /></span><span className="flex-1 text-left"><strong>Join as artist</strong><small>Build a profile and publish up to five artworks</small></span></button>
             </div>
           </section>
         </div>
@@ -98,3 +98,4 @@ export default function App() {
     </div>
   );
 }
+

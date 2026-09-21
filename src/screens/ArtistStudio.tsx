@@ -13,22 +13,59 @@ export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onO
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(blank);
   const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const artworks = useMemo(() => state.artworks.filter((artwork) => artwork.artistId === currentUser.id), [state.artworks, currentUser.id]);
 
-  const handleImage = (file?: File) => {
+  const handleImage = async (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setForm((previous) => ({ ...previous, images: [String(reader.result), ...previous.images].slice(0, 6) }));
-    reader.readAsDataURL(file);
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setMessage("Choose a JPEG, PNG or WebP image.");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setMessage("The original image must be smaller than 20 MB.");
+      return;
+    }
+    setMessage("Optimizing image…");
+    const image = document.createElement("img");
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = () => reject(new Error("The image could not be read."));
+        image.src = objectUrl;
+      });
+      const scale = Math.min(1, 2000 / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.86));
+      if (!blob || blob.size > 5 * 1024 * 1024) throw new Error("The optimized image is still larger than 5 MB.");
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("The image could not be prepared."));
+        reader.readAsDataURL(blob);
+      });
+      setForm((previous) => ({ ...previous, images: [dataUrl] }));
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The image could not be prepared.");
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
   };
 
-  const submit = (status: ArtworkStatus) => {
+  const submit = async (status: ArtworkStatus) => {
     if (!form.title || !form.medium || !form.images[0]) {
       setMessage("Add a title, medium and cover image.");
       return;
     }
-    const result = createArtwork({ ...form, status });
+    setSaving(true);
+    const result = await createArtwork({ ...form, status });
+    setSaving(false);
     if (!result.ok) {
       setMessage(result.message ?? "Unable to save artwork.");
       return;
@@ -50,7 +87,7 @@ export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onO
       <div className="mb-6 flex items-center justify-between">
         <button onClick={onBack} className="round-action !bg-white"><ArrowLeft size={20} /></button>
         <div className="text-center"><p className="eyebrow">Creator workspace</p><h1 className="font-serif text-2xl">Artist studio</h1></div>
-        <span className="count-badge">{artworks.length}/7</span>
+        <span className="count-badge">{artworks.length}/5</span>
       </div>
 
       {!creating && (
@@ -63,8 +100,8 @@ export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onO
               ))}
             </div>
           </section>
-          <button onClick={() => setCreating(true)} disabled={artworks.length >= 7} className="primary-button mt-4 w-full disabled:opacity-40"><Plus size={18} /> Add artwork</button>
-          {artworks.length >= 7 && <p className="mt-2 text-center text-xs text-amber-700">You have reached the current seven-artwork limit.</p>}
+          <button onClick={() => setCreating(true)} disabled={artworks.length >= 5} className="primary-button mt-4 w-full disabled:opacity-40"><Plus size={18} /> Add artwork</button>
+          {artworks.length >= 5 && <p className="mt-2 text-center text-xs text-amber-700">You have reached the current five-artwork limit.</p>}
 
           <div className="mt-6 space-y-3">
             {artworks.map((artwork) => (
@@ -88,7 +125,7 @@ export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onO
           <button onClick={() => fileRef.current?.click()} className="grid aspect-[4/3] w-full place-items-center overflow-hidden rounded-[22px] border-2 border-dashed border-stone-200 bg-stone-50">
             {form.images[0] ? <img src={form.images[0]} className="h-full w-full object-cover" /> : <div className="text-center text-stone-400"><ImagePlus className="mx-auto mb-2" /><span className="text-sm">Upload cover image</span></div>}
           </button>
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(event) => handleImage(event.target.files?.[0])} />
+          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => void handleImage(event.target.files?.[0])} />
           <div className="mt-4 space-y-3">
             <input className="field" placeholder="Artwork title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
             <textarea className="field min-h-24 resize-none" placeholder="Story and description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
@@ -98,9 +135,10 @@ export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onO
             <input className="field" placeholder="Tags, separated by commas" onChange={(e) => setForm({ ...form, tags: e.target.value.split(",").map((tag) => tag.trim()).filter(Boolean) })} />
           </div>
           {message && <p className="mt-3 text-sm text-red-600">{message}</p>}
-          <div className="mt-5 grid grid-cols-2 gap-2"><button onClick={() => submit("draft")} className="secondary-button">Save draft</button><button onClick={() => submit("published")} className="primary-button">Publish</button></div>
+          <div className="mt-5 grid grid-cols-2 gap-2"><button disabled={saving} onClick={() => void submit("draft")} className="secondary-button disabled:opacity-50">{saving ? "Saving…" : "Save draft"}</button><button disabled={saving} onClick={() => void submit("published")} className="primary-button disabled:opacity-50">{saving ? "Saving…" : "Publish"}</button></div>
         </section>
       )}
     </div>
   );
 }
+

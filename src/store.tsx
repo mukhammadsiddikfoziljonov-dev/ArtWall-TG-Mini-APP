@@ -11,7 +11,7 @@ declare global {
     Telegram?: {
       WebApp?: {
         initData?: string;
-        initDataUnsafe?: { user?: { id: number; first_name: string; last_name?: string; username?: string; photo_url?: string } };
+        initDataUnsafe?: { user?: { id: number; first_name: string; last_name?: string; username?: string; photo_url?: string }; start_param?: string };
         ready?: () => void;
         expand?: () => void;
         setHeaderColor?: (color: string) => void;
@@ -33,7 +33,7 @@ type StoreValue = {
   addToBasket: (artworkId: string) => void;
   removeFromBasket: (artworkId: string) => void;
   basket: BasketItem[];
-  createArtwork: (artwork: Omit<Artwork, "id" | "artistId" | "artistName" | "createdAt" | "stats">) => { ok: boolean; message?: string };
+  createArtwork: (artwork: Omit<Artwork, "id" | "artistId" | "artistName" | "createdAt" | "stats">) => Promise<{ ok: boolean; message?: string }>;
   updateArtwork: (artworkId: string, data: Partial<Artwork>) => void;
   saveView: (artworkId: string, imageDataUrl: string) => void;
   track: (name: AnalyticsEventName, artworkId?: string) => void;
@@ -42,6 +42,7 @@ type StoreValue = {
 const StoreContext = createContext<StoreValue | null>(null);
 
 const readState = (): PlatformState => {
+  if (import.meta.env.PROD) return { ...initialState, users: [], artworks: [], likes: {}, baskets: {}, savedViews: [], events: [] };
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     return stored ? JSON.parse(stored) : initialState;
@@ -205,20 +206,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     void api(`/api/basket/${artworkId}`, { method: "DELETE" }).catch(console.warn);
   };
 
-  const createArtwork: StoreValue["createArtwork"] = (artwork) => {
+  const createArtwork: StoreValue["createArtwork"] = async (artwork) => {
     const count = state.artworks.filter((item) => item.artistId === currentUser.id).length;
-    if (count >= 7) return { ok: false, message: "The seven-artwork limit has been reached." };
-    const created: Artwork = {
-      ...artwork,
-      id: crypto.randomUUID(),
-      artistId: currentUser.id,
-      artistName: currentUser.name,
-      createdAt: new Date().toISOString(),
-      stats: { views: 0, uniqueViewers: [], likes: 0, basketAdds: 0, arTries: 0, shares: 0 },
-    };
-    setState((previous) => ({ ...previous, artworks: [created, ...previous.artworks] }));
-    void api("/api/artworks", { method: "POST", body: JSON.stringify(artwork) }).catch(console.warn);
-    return { ok: true };
+    if (count >= 5) return { ok: false, message: "The five-artwork limit has been reached." };
+    try {
+      await api("/api/artworks", { method: "POST", body: JSON.stringify(artwork) });
+      const refreshed = await api<{ state: PlatformState }>("/api/bootstrap");
+      setState(refreshed.state);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : "Unable to save artwork." };
+    }
   };
 
   const updateArtwork = (artworkId: string, data: Partial<Artwork>) => {
@@ -244,3 +242,4 @@ export const useStore = () => {
   if (!value) throw new Error("useStore must be used inside StoreProvider");
   return value;
 };
+

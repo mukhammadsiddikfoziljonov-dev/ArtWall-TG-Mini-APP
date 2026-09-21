@@ -51,7 +51,7 @@ export function Profile({ language, onArtist, onAdmin }: { language: Language; o
       )}
 
       <div className="mt-5 space-y-2">
-        {currentUser.roles.includes("artist") && <button onClick={onArtist} className="menu-row"><span className="menu-icon bg-[#e7ded0] text-[#765c38]"><Palette size={18} /></span><span className="flex-1 text-left"><strong>{t(language, "artistStudio")}</strong><small>Manage profile and up to 7 artworks</small></span><ChevronRight size={18} /></button>}
+        {currentUser.roles.includes("artist") && <button onClick={onArtist} className="menu-row"><span className="menu-icon bg-[#e7ded0] text-[#765c38]"><Palette size={18} /></span><span className="flex-1 text-left"><strong>{t(language, "artistStudio")}</strong><small>Manage profile and up to 5 artworks</small></span><ChevronRight size={18} /></button>}
         {currentUser.roles.includes("admin") && <button onClick={onAdmin} className="menu-row"><span className="menu-icon bg-[#dfe9df] text-[#355343]"><BarChart3 size={18} /></span><span className="flex-1 text-left"><strong>{t(language, "admin")}</strong><small>Platform activity and performance</small></span><ChevronRight size={18} /></button>}
         <div className="menu-row"><span className="menu-icon bg-[#ece7f4] text-[#625176]"><ShieldCheck size={18} /></span><span className="flex-1"><strong>Telegram account</strong><small>{isTelegram ? "Verified Telegram session" : "Preview mode"}</small></span></div>
       </div>
@@ -63,3 +63,4 @@ export function Profile({ language, onArtist, onAdmin }: { language: Language; o
     </div>
   );
 }
+

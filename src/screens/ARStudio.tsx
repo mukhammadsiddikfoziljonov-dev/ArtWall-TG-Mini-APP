@@ -101,7 +101,7 @@ export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; lang
     await new Promise((resolve) => window.setTimeout(resolve, 120));
     try {
       if (!stageRef.current) return "";
-      return await htmlToImage.toPng(stageRef.current, { quality: 0.94, pixelRatio: 1.5, skipFonts: true, cacheBust: true });
+      return await htmlToImage.toJpeg(stageRef.current, { quality: 0.9, pixelRatio: 1.25, skipFonts: true, cacheBust: true });
     } finally {
       setCapturing(false);
       setFrozenFrame("");
@@ -119,7 +119,7 @@ export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; lang
     const image = await capture();
     if (!image) return;
     const blob = await fetch(image).then((response) => response.blob());
-    const file = new File([blob], `${artwork.title.replace(/\s+/g, "-").toLowerCase()}-artwall.png`, { type: "image/png" });
+    const file = new File([blob], `${artwork.title.replace(/\s+/g, "-").toLowerCase()}-artwall.jpg`, { type: "image/jpeg" });
     const shareData = { title: artwork.title, text: `See ${artwork.title} by ${artwork.artistName} on my wall.`, files: [file] };
     try {
       if (navigator.canShare?.(shareData)) await navigator.share(shareData);
@@ -246,3 +246,4 @@ export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; lang
 function Range({ label, value, min, max, unit, onChange }: { label: string; value: number; min: number; max: number; unit: string; onChange: (value: number) => void }) {
   return <label className="block"><span className="mb-2 flex justify-between text-[11px] font-semibold text-stone-500"><span>{label}</span><span>{value}{unit}</span></span><input type="range" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} className="accent-[#667b6e]" /></label>;
 }
+

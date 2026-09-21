@@ -1,250 +1,330 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
-import dotenv from "dotenv";
-import { initialState } from "../src/seed.ts";
+import rateLimit from "express-rate-limit";
+import helmet from "helmet";
+import { and, asc, count, desc, eq, sql } from "drizzle-orm";
+import { z } from "zod";
+import { config } from "./config.ts";
+import { db, pool } from "./db/client.ts";
+import { analyticsEvents, artworkMedia, artworks, basketItems, likes, savedViews, users } from "./db/schema.ts";
+import { deleteImage, parseImageDataUrl, signImageUrl, uploadImage } from "./storage.ts";
 import type { AnalyticsEventName, Artwork, PlatformState, Role, SavedView, User } from "../src/types.ts";
 
-dotenv.config();
-
 const app = express();
-const port = Number(process.env.API_PORT || 3001);
-const dataPath = path.resolve(process.cwd(), "server", "data.json");
-const sessionSecret = process.env.SESSION_SECRET || "local-preview-only-change-me";
-const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
-const adminTelegramIds = new Set((process.env.ADMIN_TELEGRAM_IDS || "").split(",").map((id) => id.trim()).filter(Boolean));
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"], imgSrc: ["'self'", "data:", "blob:", "https:"], mediaSrc: ["'self'", "blob:"],
+      connectSrc: ["'self'", "https:"], scriptSrc: ["'self'", "https://telegram.org"], frameAncestors: ["'self'", "https://web.telegram.org"],
+    },
+  },
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
+app.use(express.json({ limit: "8mb" }));
+app.use("/api", rateLimit({ windowMs: 15 * 60 * 1000, limit: 500, standardHeaders: "draft-8", legacyHeaders: false }));
 
-app.use(express.json({ limit: "25mb" }));
-
-const readState = (): PlatformState => {
-  try {
-    if (fs.existsSync(dataPath)) return JSON.parse(fs.readFileSync(dataPath, "utf8"));
-  } catch (error) {
-    console.error("Unable to read data store", error);
-  }
-  return structuredClone(initialState);
-};
-let state = readState();
-
-const persist = () => {
-  const temporary = `${dataPath}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(state, null, 2));
-  fs.renameSync(temporary, dataPath);
-};
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 40, standardHeaders: "draft-8", legacyHeaders: false });
+const uploadLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false });
+const allowedEvents: AnalyticsEventName[] = ["artwork_impression", "artwork_opened", "artwork_liked", "basket_added", "basket_removed", "ar_started", "ar_camera_started", "ar_view_saved", "ar_view_shared", "artist_profile_opened"];
 
 type SessionPayload = { userId: string; exp: number };
-type AuthedRequest = Request & { user?: User };
+type DbUser = typeof users.$inferSelect;
+type AuthedRequest = Request & { user?: DbUser };
 
-const sign = (payload: SessionPayload) => {
+class HttpError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const toUser = (user: DbUser, exposeTelegramId = true): User => ({
+  id: user.id, telegramId: exposeTelegramId ? user.telegramId : "", name: user.name,
+  username: user.username || undefined, avatarUrl: user.avatarUrl || undefined, roles: user.roles as Role[],
+  bio: user.bio || undefined, location: user.location || undefined, social: user.social || undefined, createdAt: user.createdAt.toISOString(),
+});
+
+const signSession = (payload: SessionPayload) => {
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = crypto.createHmac("sha256", sessionSecret).update(encoded).digest("base64url");
+  const signature = crypto.createHmac("sha256", config.sessionSecret).update(encoded).digest("base64url");
   return `${encoded}.${signature}`;
 };
 
 const readSession = (token: string): SessionPayload | null => {
-  const [encoded, signature] = token.split(".");
-  if (!encoded || !signature) return null;
-  const expected = crypto.createHmac("sha256", sessionSecret).update(encoded).digest("base64url");
-  if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
-  const payload = JSON.parse(Buffer.from(encoded, "base64url").toString()) as SessionPayload;
-  return payload.exp > Date.now() ? payload : null;
+  try {
+    const [encoded, signature] = token.split(".");
+    if (!encoded || !signature) return null;
+    const expected = crypto.createHmac("sha256", config.sessionSecret).update(encoded).digest("base64url");
+    if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString()) as SessionPayload;
+    return payload.exp > Date.now() ? payload : null;
+  } catch { return null; }
 };
 
-const issueSession = (user: User) => ({ token: sign({ userId: user.id, exp: Date.now() + 1000 * 60 * 60 * 24 * 30 }), user });
+const issueSession = (user: DbUser) => ({ token: signSession({ userId: user.id, exp: Date.now() + 1000 * 60 * 60 * 24 }), user: toUser(user) });
 
-const auth = (request: AuthedRequest, response: Response, next: NextFunction) => {
-  const token = request.headers.authorization?.replace(/^Bearer\s+/i, "");
-  const session = token ? readSession(token) : null;
-  const user = session ? state.users.find((item) => item.id === session.userId) : undefined;
-  if (!user) return response.status(401).json({ error: "Authentication required" });
-  request.user = user;
-  next();
+const auth = async (request: AuthedRequest, _response: Response, next: NextFunction) => {
+  try {
+    const token = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+    const session = token ? readSession(token) : null;
+    if (!session) throw new HttpError(401, "Authentication required");
+    const [user] = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
+    if (!user) throw new HttpError(401, "Authentication required");
+    request.user = user;
+    next();
+  } catch (error) { next(error); }
 };
 
 const validateTelegramInitData = (initData: string) => {
-  if (!botToken) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
+  if (!config.botToken) throw new HttpError(503, "Telegram authentication is not configured yet");
   const params = new URLSearchParams(initData);
   const receivedHash = params.get("hash");
-  if (!receivedHash) throw new Error("Missing Telegram signature");
+  if (!receivedHash) throw new HttpError(401, "Missing Telegram signature");
   params.delete("hash");
   const authDate = Number(params.get("auth_date"));
-  if (!authDate || Date.now() / 1000 - authDate > 3600) throw new Error("Telegram session is expired");
+  if (!authDate || Date.now() / 1000 - authDate > 900) throw new HttpError(401, "Telegram session is expired");
   const dataCheckString = [...params.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key}=${value}`).join("\n");
-  const secret = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
+  const secret = crypto.createHmac("sha256", "WebAppData").update(config.botToken).digest();
   const expected = crypto.createHmac("sha256", secret).update(dataCheckString).digest("hex");
-  if (receivedHash.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(receivedHash), Buffer.from(expected))) throw new Error("Invalid Telegram signature");
+  if (receivedHash.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(receivedHash, "hex"), Buffer.from(expected, "hex"))) throw new HttpError(401, "Invalid Telegram signature");
   const rawUser = params.get("user");
-  if (!rawUser) throw new Error("Telegram user is missing");
+  if (!rawUser) throw new HttpError(401, "Telegram user is missing");
   return JSON.parse(rawUser) as { id: number; first_name: string; last_name?: string; username?: string; photo_url?: string };
 };
 
-app.get("/api/health", (_request, response) => response.json({ ok: true }));
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+const countRole = async (transaction: Transaction, role: "artist" | "buyer") => {
+  const condition = role === "artist" ? sql`${role} = ANY(${users.roles})` : sql`NOT ('artist' = ANY(${users.roles}))`;
+  const [result] = await transaction.select({ value: count() }).from(users).where(condition);
+  return Number(result.value);
+};
 
-app.post("/api/auth/telegram", (request, response) => {
+const createTelegramUser = async (telegram: ReturnType<typeof validateTelegramInitData>, requestedRole: "buyer" | "artist") => db.transaction(async (tx) => {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(87421001)`);
+  const telegramId = String(telegram.id);
+  const [existing] = await tx.select().from(users).where(eq(users.telegramId, telegramId)).limit(1);
+  if (existing) return existing;
+  const isAdmin = config.adminTelegramIds.has(telegramId);
+  if (requestedRole === "artist" || isAdmin) {
+    if (!isAdmin && await countRole(tx, "artist") >= config.maxArtists) throw new HttpError(409, "The artist beta is full. Join the waitlist for the next opening.");
+  } else if (await countRole(tx, "buyer") >= config.maxBuyers) throw new HttpError(409, "The buyer beta is full. Artist invitations can still register with an artist start link.");
+  const roles: Role[] = isAdmin ? ["buyer", "artist", "admin"] : requestedRole === "artist" ? ["buyer", "artist"] : ["buyer"];
+  const [created] = await tx.insert(users).values({ telegramId, name: [telegram.first_name, telegram.last_name].filter(Boolean).join(" "), username: telegram.username, avatarUrl: telegram.photo_url, roles }).returning();
+  return created;
+});
+
+const profileSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(), bio: z.string().trim().max(600).optional(),
+  location: z.string().trim().max(120).optional(), social: z.string().trim().max(120).optional(), avatarUrl: z.string().url().max(2000).optional(),
+}).strict();
+
+const artworkSchema = z.object({
+  title: z.string().trim().min(1).max(120), description: z.string().trim().max(3000).default(""), medium: z.string().trim().min(1).max(120),
+  year: z.number().int().min(1000).max(3000), width: z.number().positive().max(1000), height: z.number().positive().max(1000),
+  price: z.number().nonnegative().max(10_000_000), currency: z.string().trim().regex(/^[A-Z]{3}$/).default("USD"), available: z.boolean().default(true),
+  status: z.enum(["draft", "published"]), images: z.array(z.string()).length(1), tags: z.array(z.string().trim().min(1).max(40)).max(10).default([]),
+}).strict();
+const artworkPatchSchema = artworkSchema.omit({ images: true }).partial().strict();
+const eventSchema = z.object({ name: z.enum(allowedEvents as [AnalyticsEventName, ...AnalyticsEventName[]]), artworkId: z.string().uuid().optional() }).strict();
+
+const getState = async (current: DbUser): Promise<PlatformState> => {
+  const admin = current.roles.includes("admin");
+  const [userRows, artworkRows, mediaRows, likeRows, basketRows, viewRows, eventRows] = await Promise.all([
+    db.select().from(users).orderBy(asc(users.createdAt)), db.select().from(artworks).orderBy(desc(artworks.createdAt)), db.select().from(artworkMedia).orderBy(asc(artworkMedia.position)),
+    db.select().from(likes), db.select().from(basketItems), db.select().from(savedViews).orderBy(desc(savedViews.createdAt)), db.select().from(analyticsEvents),
+  ]);
+  const visibleArtworkRows = artworkRows.filter((artwork) => admin || artwork.status === "published" || artwork.artistId === current.id);
+  const userById = new Map(userRows.map((user) => [user.id, user]));
+  const mediaByArtwork = new Map<string, typeof mediaRows>();
+  for (const media of mediaRows) mediaByArtwork.set(media.artworkId, [...(mediaByArtwork.get(media.artworkId) || []), media]);
+  const artworkDtos: Artwork[] = await Promise.all(visibleArtworkRows.map(async (artwork) => {
+    const artworkLikes = likeRows.filter((like) => like.artworkId === artwork.id);
+    const artworkBaskets = basketRows.filter((item) => item.artworkId === artwork.id);
+    const artworkEvents = eventRows.filter((event) => event.artworkId === artwork.id);
+    const opened = artworkEvents.filter((event) => event.name === "artwork_opened");
+    const media = mediaByArtwork.get(artwork.id) || [];
+    return {
+      id: artwork.id, artistId: artwork.artistId, artistName: userById.get(artwork.artistId)?.name || "Artist", title: artwork.title, description: artwork.description,
+      medium: artwork.medium, year: artwork.year, width: Number(artwork.width), height: Number(artwork.height), price: artwork.priceCents / 100, currency: artwork.currency,
+      available: artwork.available, status: artwork.status as Artwork["status"], images: await Promise.all(media.map((item) => signImageUrl(item.objectKey, item.sourceUrl))),
+      tags: artwork.tags, createdAt: artwork.createdAt.toISOString(), stats: {
+        views: opened.length, uniqueViewers: [...new Set(opened.map((event) => event.userId))], likes: artworkLikes.length, basketAdds: artworkBaskets.length,
+        arTries: artworkEvents.filter((event) => event.name === "ar_started").length, shares: artworkEvents.filter((event) => event.name === "ar_view_shared").length,
+      },
+    };
+  }));
+  const scopedLikes = admin ? likeRows : likeRows.filter((like) => like.userId === current.id);
+  const scopedBaskets = admin ? basketRows : basketRows.filter((item) => item.userId === current.id);
+  const likesState: Record<string, string[]> = {};
+  for (const item of scopedLikes) (likesState[item.userId] ||= []).push(item.artworkId);
+  const basketsState: PlatformState["baskets"] = {};
+  for (const item of scopedBaskets) (basketsState[item.userId] ||= []).push({ artworkId: item.artworkId, quantity: item.quantity });
+  const scopedViews = admin ? viewRows : viewRows.filter((view) => view.userId === current.id);
+  const viewDtos: SavedView[] = await Promise.all(scopedViews.map(async (view) => ({ id: view.id, userId: view.userId, artworkId: view.artworkId, imageDataUrl: await signImageUrl(view.objectKey, view.sourceUrl), createdAt: view.createdAt.toISOString() })));
+  return {
+    users: userRows.filter((user) => admin || user.id === current.id || user.roles.includes("artist")).map((user) => toUser(user, admin || user.id === current.id)),
+    artworks: artworkDtos, likes: likesState, baskets: basketsState, savedViews: viewDtos,
+    events: (admin ? eventRows : eventRows.filter((event) => event.userId === current.id)).map((event) => ({ id: event.id, name: event.name as AnalyticsEventName, userId: event.userId, artworkId: event.artworkId || undefined, createdAt: event.createdAt.toISOString() })),
+  };
+};
+
+app.get("/api/health", async (_request, response, next) => { try { await pool.query("SELECT 1"); response.json({ ok: true, database: "connected", environment: config.nodeEnv }); } catch (error) { next(error); } });
+
+app.post("/api/auth/telegram", authLimiter, async (request, response, next) => {
   try {
     const telegram = validateTelegramInitData(String(request.body.initData || ""));
-    const telegramId = String(telegram.id);
-    let user = state.users.find((item) => item.telegramId === telegramId);
-    if (!user) {
-      user = {
-        id: crypto.randomUUID(),
-        telegramId,
-        name: [telegram.first_name, telegram.last_name].filter(Boolean).join(" "),
-        username: telegram.username,
-        avatarUrl: telegram.photo_url,
-        roles: adminTelegramIds.has(telegramId) ? ["buyer", "artist", "admin"] : ["buyer"],
-        createdAt: new Date().toISOString(),
-      };
-      state.users.push(user);
-      persist();
-    }
+    response.json(issueSession(await createTelegramUser(telegram, request.body.requestedRole === "artist" ? "artist" : "buyer")));
+  } catch (error) { next(error); }
+});
+
+app.post("/api/auth/preview", authLimiter, async (request, response, next) => {
+  try {
+    if (!config.previewAuthEnabled) throw new HttpError(404, "Not found");
+    const role = (["buyer", "artist", "admin"].includes(request.body.role) ? request.body.role : "buyer") as Role;
+    const id = `preview-${role}`;
+    const roles: Role[] = role === "admin" ? ["buyer", "artist", "admin"] : role === "artist" ? ["buyer", "artist"] : ["buyer"];
+    const [user] = await db.insert(users).values({ telegramId: id, name: role === "admin" ? "ArtWall Admin" : role === "artist" ? "Demo Artist" : "Telegram Buyer", username: id, roles, bio: role !== "buyer" ? "Contemporary artist building a collection on ArtWall." : undefined, location: role !== "buyer" ? "Tashkent, Uzbekistan" : undefined }).onConflictDoUpdate({ target: users.telegramId, set: { roles, updatedAt: new Date() } }).returning();
     response.json(issueSession(user));
-  } catch (error) {
-    response.status(401).json({ error: error instanceof Error ? error.message : "Telegram authentication failed" });
-  }
+  } catch (error) { next(error); }
 });
 
-app.post("/api/auth/preview", (request, response) => {
-  if (process.env.NODE_ENV === "production") return response.status(404).end();
-  const role = (["buyer", "artist", "admin"].includes(request.body.role) ? request.body.role : "buyer") as Role;
-  const id = `preview-${role}`;
-  let user = state.users.find((item) => item.id === id);
-  if (!user) {
-    user = {
-      id,
-      telegramId: `preview-${role}`,
-      name: role === "admin" ? "ArtWall Admin" : role === "artist" ? "Demo Artist" : "Telegram Buyer",
-      username: role === "admin" ? "artwall_admin" : role === "artist" ? "demo_artist" : "artwall_buyer",
-      roles: role === "admin" ? ["buyer", "artist", "admin"] : role === "artist" ? ["buyer", "artist"] : ["buyer"],
-      bio: role !== "buyer" ? "Contemporary artist building a collection on ArtWall." : undefined,
-      location: role !== "buyer" ? "Tashkent, Uzbekistan" : undefined,
-      createdAt: new Date().toISOString(),
-    };
-    state.users.push(user);
-    persist();
-  }
-  response.json(issueSession(user));
+app.get("/api/bootstrap", auth, async (request: AuthedRequest, response, next) => { try { response.json({ user: toUser(request.user!), state: await getState(request.user!) }); } catch (error) { next(error); } });
+
+app.patch("/api/profile", auth, async (request: AuthedRequest, response, next) => {
+  try { const values = profileSchema.parse(request.body); const [user] = await db.update(users).set({ ...values, updatedAt: new Date() }).where(eq(users.id, request.user!.id)).returning(); response.json(toUser(user)); } catch (error) { next(error); }
 });
 
-app.get("/api/bootstrap", auth, (request: AuthedRequest, response) => {
-  const user = request.user!;
-  const admin = user.roles.includes("admin");
-  response.json({
-    user,
-    state: {
-      ...state,
-      likes: admin ? state.likes : { [user.id]: state.likes[user.id] ?? [] },
-      baskets: admin ? state.baskets : { [user.id]: state.baskets[user.id] ?? [] },
-      savedViews: admin ? state.savedViews : state.savedViews.filter((view) => view.userId === user.id),
-    },
-  });
+app.post("/api/profile/role", auth, async (request: AuthedRequest, response, next) => {
+  try {
+    const requestedRole = z.enum(["buyer", "artist"]).parse(request.body.role);
+    const updated = await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(87421002)`);
+      const [current] = await tx.select().from(users).where(eq(users.id, request.user!.id)).limit(1);
+      if (!current) throw new HttpError(404, "User not found");
+      const isAdmin = current.roles.includes("admin");
+      if (requestedRole === "artist" && !current.roles.includes("artist") && await countRole(tx, "artist") >= config.maxArtists) throw new HttpError(409, "The artist beta is full");
+      if (requestedRole === "buyer" && current.roles.includes("artist") && await countRole(tx, "buyer") >= config.maxBuyers) throw new HttpError(409, "The buyer beta is full");
+      const roles: Role[] = requestedRole === "artist" ? ["buyer", "artist", ...(isAdmin ? ["admin" as const] : [])] : ["buyer", ...(isAdmin ? ["admin" as const] : [])];
+      const [user] = await tx.update(users).set({ roles, updatedAt: new Date() }).where(eq(users.id, current.id)).returning();
+      return user;
+    });
+    response.json(toUser(updated));
+  } catch (error) { next(error); }
 });
 
-app.patch("/api/profile", auth, (request: AuthedRequest, response) => {
-  const allowed = ["name", "bio", "location", "social", "avatarUrl"] as const;
-  state.users = state.users.map((user) => user.id === request.user!.id
-    ? { ...user, ...Object.fromEntries(allowed.filter((key) => typeof request.body[key] === "string").map((key) => [key, request.body[key]])) }
-    : user);
-  persist();
-  response.json(state.users.find((user) => user.id === request.user!.id));
+app.post("/api/likes/:artworkId/toggle", auth, async (request: AuthedRequest, response, next) => {
+  try {
+    const artworkId = z.string().uuid().parse(request.params.artworkId);
+    const [artwork] = await db.select({ id: artworks.id }).from(artworks).where(eq(artworks.id, artworkId)).limit(1);
+    if (!artwork) throw new HttpError(404, "Artwork not found");
+    const [existing] = await db.select().from(likes).where(and(eq(likes.userId, request.user!.id), eq(likes.artworkId, artworkId))).limit(1);
+    if (existing) await db.delete(likes).where(and(eq(likes.userId, request.user!.id), eq(likes.artworkId, artworkId)));
+    else await db.transaction(async (tx) => { await tx.insert(likes).values({ userId: request.user!.id, artworkId }).onConflictDoNothing(); await tx.insert(analyticsEvents).values({ name: "artwork_liked", userId: request.user!.id, artworkId }); });
+    const [total] = await db.select({ value: count() }).from(likes).where(eq(likes.artworkId, artworkId));
+    response.json({ liked: !existing, likes: Number(total.value) });
+  } catch (error) { next(error); }
 });
 
-app.post("/api/profile/role", auth, (request: AuthedRequest, response) => {
-  const role = request.body.role === "artist" ? "artist" : "buyer";
-  const user = state.users.find((item) => item.id === request.user!.id)!;
-  user.roles = role === "artist" ? Array.from(new Set([...user.roles, "buyer", "artist"])) : Array.from(new Set([...user.roles, "buyer"]));
-  persist();
-  response.json(user);
+app.post("/api/basket/:artworkId", auth, async (request: AuthedRequest, response, next) => {
+  try {
+    const artworkId = z.string().uuid().parse(request.params.artworkId);
+    const [artwork] = await db.select({ id: artworks.id }).from(artworks).where(eq(artworks.id, artworkId)).limit(1);
+    if (!artwork) throw new HttpError(404, "Artwork not found");
+    const inserted = await db.insert(basketItems).values({ userId: request.user!.id, artworkId }).onConflictDoNothing().returning();
+    if (inserted.length) await db.insert(analyticsEvents).values({ name: "basket_added", userId: request.user!.id, artworkId });
+    response.json(await db.select().from(basketItems).where(eq(basketItems.userId, request.user!.id)));
+  } catch (error) { next(error); }
 });
 
-app.post("/api/likes/:artworkId/toggle", auth, (request: AuthedRequest, response) => {
-  const artwork = state.artworks.find((item) => item.id === request.params.artworkId);
-  if (!artwork) return response.status(404).json({ error: "Artwork not found" });
-  const current = state.likes[request.user!.id] ?? [];
-  const liked = current.includes(artwork.id);
-  state.likes[request.user!.id] = liked ? current.filter((id) => id !== artwork.id) : [...current, artwork.id];
-  artwork.stats.likes = Math.max(0, artwork.stats.likes + (liked ? -1 : 1));
-  if (!liked) state.events.push({ id: crypto.randomUUID(), name: "artwork_liked", userId: request.user!.id, artworkId: artwork.id, createdAt: new Date().toISOString() });
-  persist();
-  response.json({ liked: !liked, likes: artwork.stats.likes });
+app.delete("/api/basket/:artworkId", auth, async (request: AuthedRequest, response, next) => {
+  try {
+    const artworkId = z.string().uuid().parse(request.params.artworkId);
+    const deleted = await db.delete(basketItems).where(and(eq(basketItems.userId, request.user!.id), eq(basketItems.artworkId, artworkId))).returning();
+    if (deleted.length) await db.insert(analyticsEvents).values({ name: "basket_removed", userId: request.user!.id, artworkId });
+    response.json(await db.select().from(basketItems).where(eq(basketItems.userId, request.user!.id)));
+  } catch (error) { next(error); }
 });
 
-app.post("/api/basket/:artworkId", auth, (request: AuthedRequest, response) => {
-  const artwork = state.artworks.find((item) => item.id === request.params.artworkId);
-  if (!artwork) return response.status(404).json({ error: "Artwork not found" });
-  const basket = state.baskets[request.user!.id] ?? [];
-  if (!basket.some((item) => item.artworkId === artwork.id)) {
-    state.baskets[request.user!.id] = [...basket, { artworkId: artwork.id, quantity: 1 }];
-    artwork.stats.basketAdds += 1;
-    state.events.push({ id: crypto.randomUUID(), name: "basket_added", userId: request.user!.id, artworkId: artwork.id, createdAt: new Date().toISOString() });
-    persist();
-  }
-  response.json(state.baskets[request.user!.id]);
+app.post("/api/artworks", auth, uploadLimiter, async (request: AuthedRequest, response, next) => {
+  let objectKey = "";
+  try {
+    if (!request.user!.roles.includes("artist")) throw new HttpError(403, "Artist role required");
+    const input = artworkSchema.parse(request.body);
+    const parsedImage = parseImageDataUrl(input.images[0]);
+    objectKey = await uploadImage(`artists/${request.user!.id}/artworks`, parsedImage);
+    const artwork = await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${request.user!.id}))`);
+      const [total] = await tx.select({ value: count() }).from(artworks).where(eq(artworks.artistId, request.user!.id));
+      if (Number(total.value) >= config.maxArtworksPerArtist) throw new HttpError(409, `The ${config.maxArtworksPerArtist}-artwork limit has been reached`);
+      const [created] = await tx.insert(artworks).values({ artistId: request.user!.id, title: input.title, description: input.description, medium: input.medium, year: input.year, width: String(input.width), height: String(input.height), priceCents: Math.round(input.price * 100), currency: input.currency, available: input.available, status: input.status, tags: input.tags }).returning();
+      await tx.insert(artworkMedia).values({ artworkId: created.id, objectKey, contentType: parsedImage.contentType, byteSize: parsedImage.bytes.length, position: 0 });
+      return created;
+    });
+    response.status(201).json({ id: artwork.id });
+  } catch (error) { if (objectKey) await deleteImage(objectKey).catch(console.error); next(error); }
 });
 
-app.delete("/api/basket/:artworkId", auth, (request: AuthedRequest, response) => {
-  state.baskets[request.user!.id] = (state.baskets[request.user!.id] ?? []).filter((item) => item.artworkId !== request.params.artworkId);
-  state.events.push({ id: crypto.randomUUID(), name: "basket_removed", userId: request.user!.id, artworkId: request.params.artworkId, createdAt: new Date().toISOString() });
-  persist();
-  response.json(state.baskets[request.user!.id]);
+app.patch("/api/artworks/:artworkId", auth, async (request: AuthedRequest, response, next) => {
+  try {
+    const artworkId = z.string().uuid().parse(request.params.artworkId); const input = artworkPatchSchema.parse(request.body);
+    const [existing] = await db.select().from(artworks).where(eq(artworks.id, artworkId)).limit(1);
+    if (!existing) throw new HttpError(404, "Artwork not found");
+    if (existing.artistId !== request.user!.id && !request.user!.roles.includes("admin")) throw new HttpError(403, "Not allowed");
+    const [updated] = await db.update(artworks).set({
+      ...(input.title !== undefined ? { title: input.title } : {}), ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.medium !== undefined ? { medium: input.medium } : {}), ...(input.year !== undefined ? { year: input.year } : {}),
+      ...(input.width !== undefined ? { width: String(input.width) } : {}), ...(input.height !== undefined ? { height: String(input.height) } : {}),
+      ...(input.price !== undefined ? { priceCents: Math.round(input.price * 100) } : {}), ...(input.currency !== undefined ? { currency: input.currency } : {}),
+      ...(input.available !== undefined ? { available: input.available } : {}), ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.tags !== undefined ? { tags: input.tags } : {}), updatedAt: new Date(),
+    }).where(eq(artworks.id, artworkId)).returning();
+    response.json(updated);
+  } catch (error) { next(error); }
 });
 
-app.post("/api/artworks", auth, (request: AuthedRequest, response) => {
-  const user = request.user!;
-  if (!user.roles.includes("artist")) return response.status(403).json({ error: "Artist role required" });
-  if (state.artworks.filter((item) => item.artistId === user.id).length >= 7) return response.status(409).json({ error: "The seven-artwork limit has been reached" });
-  const artwork: Artwork = {
-    ...request.body,
-    id: crypto.randomUUID(),
-    artistId: user.id,
-    artistName: user.name,
-    createdAt: new Date().toISOString(),
-    stats: { views: 0, uniqueViewers: [], likes: 0, basketAdds: 0, arTries: 0, shares: 0 },
-  };
-  state.artworks.unshift(artwork);
-  persist();
-  response.status(201).json(artwork);
+app.post("/api/views", auth, uploadLimiter, async (request: AuthedRequest, response, next) => {
+  let objectKey = "";
+  try {
+    const artworkId = z.string().uuid().parse(request.body.artworkId); const image = parseImageDataUrl(request.body.imageDataUrl);
+    objectKey = await uploadImage(`buyers/${request.user!.id}/views`, image);
+    const view = await db.transaction(async (tx) => {
+      const [created] = await tx.insert(savedViews).values({ userId: request.user!.id, artworkId, objectKey, composition: typeof request.body.composition === "object" ? request.body.composition : {} }).returning();
+      await tx.insert(analyticsEvents).values({ name: "ar_view_saved", userId: request.user!.id, artworkId }); return created;
+    });
+    response.status(201).json({ id: view.id, imageDataUrl: await signImageUrl(view.objectKey), createdAt: view.createdAt.toISOString() });
+  } catch (error) { if (objectKey) await deleteImage(objectKey).catch(console.error); next(error); }
 });
 
-app.patch("/api/artworks/:artworkId", auth, (request: AuthedRequest, response) => {
-  const artwork = state.artworks.find((item) => item.id === request.params.artworkId);
-  if (!artwork) return response.status(404).json({ error: "Artwork not found" });
-  if (artwork.artistId !== request.user!.id && !request.user!.roles.includes("admin")) return response.status(403).json({ error: "Not allowed" });
-  Object.assign(artwork, request.body, { id: artwork.id, artistId: artwork.artistId, stats: artwork.stats });
-  persist();
-  response.json(artwork);
+app.post("/api/events", auth, async (request: AuthedRequest, response, next) => {
+  try { const event = eventSchema.parse(request.body); const [created] = await db.insert(analyticsEvents).values({ name: event.name, userId: request.user!.id, artworkId: event.artworkId }).returning(); response.status(201).json(created); } catch (error) { next(error); }
 });
 
-app.post("/api/views", auth, (request: AuthedRequest, response) => {
-  const view: SavedView = { id: crypto.randomUUID(), userId: request.user!.id, artworkId: request.body.artworkId, imageDataUrl: request.body.imageDataUrl, createdAt: new Date().toISOString() };
-  state.savedViews.unshift(view);
-  state.events.push({ id: crypto.randomUUID(), name: "ar_view_saved", userId: request.user!.id, artworkId: view.artworkId, createdAt: new Date().toISOString() });
-  persist();
-  response.status(201).json(view);
+app.get("/api/admin/stats", auth, async (request: AuthedRequest, response, next) => {
+  try {
+    if (!request.user!.roles.includes("admin")) throw new HttpError(403, "Admin role required");
+    const [userRows, artworkRows, likeRows, basketRows, eventRows, viewRows] = await Promise.all([db.select().from(users), db.select().from(artworks), db.select().from(likes), db.select().from(basketItems), db.select().from(analyticsEvents), db.select().from(savedViews)]);
+    response.json({ users: userRows.length, buyers: userRows.filter((user) => !user.roles.includes("artist")).length, artists: userRows.filter((user) => user.roles.includes("artist")).length, artworks: artworkRows.length, likes: likeRows.length, inBaskets: basketRows.length, views: eventRows.filter((event) => event.name === "artwork_opened").length, arTries: eventRows.filter((event) => event.name === "ar_started").length, savedViews: viewRows.length });
+  } catch (error) { next(error); }
 });
 
-app.post("/api/events", auth, (request: AuthedRequest, response) => {
-  const allowed: AnalyticsEventName[] = ["artwork_impression", "artwork_opened", "artwork_liked", "basket_added", "basket_removed", "ar_started", "ar_camera_started", "ar_view_saved", "ar_view_shared", "artist_profile_opened"];
-  if (!allowed.includes(request.body.name)) return response.status(400).json({ error: "Unknown event" });
-  const event = { id: crypto.randomUUID(), name: request.body.name as AnalyticsEventName, userId: request.user!.id, artworkId: request.body.artworkId, createdAt: new Date().toISOString() };
-  state.events.push(event);
-  const artwork = state.artworks.find((item) => item.id === event.artworkId);
-  if (artwork) {
-    if (event.name === "artwork_opened") {
-      artwork.stats.views += 1;
-      if (!artwork.stats.uniqueViewers.includes(request.user!.id)) artwork.stats.uniqueViewers.push(request.user!.id);
-    }
-    if (event.name === "ar_started") artwork.stats.arTries += 1;
-    if (event.name === "ar_view_shared") artwork.stats.shares += 1;
-  }
-  persist();
-  response.status(201).json(event);
+if (config.nodeEnv === "production") {
+  const dist = path.resolve(process.cwd(), "dist");
+  app.use(express.static(dist, { maxAge: "1h", index: false }));
+  app.get("*", (_request, response) => response.sendFile(path.join(dist, "index.html")));
+}
+
+app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+  if (error instanceof z.ZodError) return response.status(400).json({ error: error.issues[0]?.message || "Invalid request" });
+  if (error instanceof HttpError) return response.status(error.status).json({ error: error.message });
+  console.error(error); return response.status(500).json({ error: "Unexpected server error" });
 });
 
-app.get("/api/admin/stats", auth, (request: AuthedRequest, response) => {
-  if (!request.user!.roles.includes("admin")) return response.status(403).json({ error: "Admin role required" });
-  response.json({ users: state.users.length, artists: state.users.filter((user) => user.roles.includes("artist")).length, artworks: state.artworks.length, events: state.events.length });
-});
+const server = app.listen(config.port, "0.0.0.0", () => console.log(`ArtWall listening on http://0.0.0.0:${config.port}`));
+const shutdown = async () => { server.close(); await pool.end(); };
+process.on("SIGTERM", shutdown); process.on("SIGINT", shutdown);
 
-app.listen(port, () => console.log(`ArtWall API listening on http://localhost:${port}`));
