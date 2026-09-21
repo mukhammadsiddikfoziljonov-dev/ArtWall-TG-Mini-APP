@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ded9cf"/><stop offset=".55" stop-color="#8aa0a2"/><stop offset="1" stop-color="#344d50"/></linearGradient>
+    <filter id="paper"><feTurbulence baseFrequency=".8" numOctaves="2"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .12 0"/></filter>
+  </defs>
+  <rect width="1200" height="900" fill="url(#sky)"/>
+  <circle cx="932" cy="204" r="105" fill="#f0d39c" opacity=".7"/>
+  <path d="M0 545c180-92 346-76 498-13 188 78 344 57 702-42v410H0z" fill="#30484b"/>
+  <path d="M0 660c232-82 418-61 576 5 172 72 378 43 624-61v296H0z" fill="#718787"/>
+  <path d="M0 760c213-50 378-29 542 28 201 70 400 47 658-41v153H0z" fill="#d4c4a5"/>
+  <g fill="#233638"><rect x="125" y="421" width="15" height="251"/><path d="M132 410l-72 105h144z"/><rect x="1052" y="390" width="13" height="230"/><path d="M1058 377l-67 96h134z"/></g>
+  <rect width="1200" height="900" filter="url(#paper)"/>
+</svg>

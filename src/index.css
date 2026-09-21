@@ -1,21 +1,85 @@
 @import "tailwindcss";
 
 @theme {
-  --font-serif-custom: 'Georgia', serif;
+  --font-serif: Georgia, "Times New Roman", serif;
 }
 
-body {
-  background-color: #F9F8F6;
-  color: #1A1A1A;
-  font-family: 'Helvetica Neue', Arial, sans-serif;
-  overscroll-behavior-y: none;
-  touch-action: pan-x pan-y;
+:root {
+  color: #20201d;
+  background: #f4f1ea;
+  font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
-html, body {
-  position: fixed;
-  overflow: hidden;
-  width: 100%;
-  height: 100%;
-  height: 100dvh;
+* { box-sizing: border-box; }
+html, body, #root { min-height: 100%; margin: 0; }
+body { overscroll-behavior-y: none; }
+button, input, textarea { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+img { display: block; }
+input[type="range"] { width: 100%; }
+
+.page-shell {
+  width: min(100%, 672px);
+  margin: 0 auto;
+  padding: 22px 16px 104px;
 }
+
+.section-heading { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 24px; }
+.section-heading h1 { margin: 2px 0 0; font-family: Georgia, serif; font-size: 40px; line-height: 1; }
+.eyebrow { margin: 0; color: #667b6e; font-size: 10px; font-weight: 800; letter-spacing: .2em; text-transform: uppercase; }
+.count-badge { display: inline-grid; min-width: 34px; height: 34px; place-items: center; border-radius: 999px; background: white; color: #777168; font-size: 12px; font-weight: 700; }
+
+.round-action {
+  display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid rgba(255,255,255,.25);
+  border-radius: 999px; background: rgba(255,255,255,.86); color: #20201d;
+  box-shadow: 0 8px 24px rgba(0,0,0,.10); backdrop-filter: blur(12px);
+}
+
+.primary-button, .secondary-button {
+  display: flex; min-height: 48px; align-items: center; justify-content: center; gap: 8px;
+  border-radius: 16px; padding: 0 17px; font-size: 13px; font-weight: 700;
+  transition: transform .15s ease, background .15s ease;
+}
+.primary-button:active, .secondary-button:active { transform: scale(.98); }
+.primary-button { background: #24362e; color: white; }
+.secondary-button { background: white; color: #20201d; border: 1px solid #dfdbd2; }
+.mini-button { border-radius: 10px; background: #f2f0ea; padding: 7px 10px; font-size: 10px; font-weight: 700; }
+
+.field, .field-label {
+  display: block; width: 100%; border: 1px solid #e4e0d7; border-radius: 14px;
+  background: #faf9f6; padding: 12px 13px; color: #20201d; font-size: 13px; outline: none;
+}
+.field:focus, .field-label:focus-within { border-color: #667b6e; box-shadow: 0 0 0 3px rgba(102,123,110,.10); }
+.field-label { color: #89847a; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+
+.empty-state {
+  display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px;
+  border: 1px dashed #d6d1c6; border-radius: 26px; color: #9a958b; text-align: center; padding: 30px;
+}
+.empty-state h2 { margin: 4px 0 0; color: #403f3b; font-family: Georgia, serif; font-size: 24px; }
+.empty-state p { margin: 0; max-width: 280px; font-size: 13px; line-height: 1.6; }
+
+.menu-row {
+  display: flex; width: 100%; align-items: center; gap: 12px; border-radius: 19px;
+  background: white; padding: 12px; color: #20201d; box-shadow: 0 4px 18px rgba(40,36,28,.04);
+}
+.menu-icon { display: grid; width: 42px; height: 42px; flex: none; place-items: center; border-radius: 14px; }
+.menu-row strong { display: block; font-size: 13px; }
+.menu-row small { display: block; margin-top: 2px; color: #99948a; font-size: 10px; }
+
+.glass-action {
+  display: flex; min-width: 82px; height: 50px; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid rgba(255,255,255,.2); border-radius: 17px; background: rgba(0,0,0,.48);
+  color: white; font-size: 10px; font-weight: 700; backdrop-filter: blur(14px);
+}
+.ar-footer-button {
+  display: flex; min-width: 48px; height: 48px; align-items: center; justify-content: center; gap: 6px;
+  border-radius: 15px; background: rgba(255,255,255,.14); padding: 0 12px;
+  color: white; font-size: 10px; font-weight: 700;
+}
+.scrollbar-none::-webkit-scrollbar { display: none; }
+
+@media (min-width: 640px) { .page-shell { padding-inline: 24px; } }
