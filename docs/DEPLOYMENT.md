@@ -19,8 +19,6 @@ The Neon project has separate `development` and `production` branches. All schem
 3. Supply the secret values requested during Blueprint creation:
    - `DATABASE_URL`: pooled Neon production connection string.
    - `DATABASE_URL_UNPOOLED`: direct Neon production connection string, used only for migrations.
-   - `TELEGRAM_BOT_TOKEN`: token issued by BotFather.
-   - `ADMIN_TELEGRAM_IDS`: comma-separated numeric Telegram IDs.
    - `STORAGE_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_REGION`: production branch Object Storage values.
 4. Deploy. Render runs checks, then the start command applies versioned migrations before starting the service. The migration runner is idempotent, which makes this safe on free instances that do not support a separate pre-deploy command.
 5. Verify `https://<service>.onrender.com/api/health` returns `{"ok":true,"database":"connected"}`.
@@ -29,7 +27,7 @@ Secrets stay in Render and Neon; do not add them to GitHub. Render creates `SESS
 
 ## Connect Telegram last
 
-After the HTTPS deployment is healthy:
+After the HTTPS deployment is healthy, add `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_IDS` as secret environment variables in the Render dashboard, then:
 
 1. Open BotFather and create or select the ArtWall bot.
 2. Set its menu button / Mini App URL to the Render HTTPS URL.

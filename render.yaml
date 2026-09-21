@@ -17,12 +17,8 @@ services:
         sync: false
       - key: DATABASE_URL_UNPOOLED
         sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
       - key: SESSION_SECRET
         generateValue: true
-      - key: ADMIN_TELEGRAM_IDS
-        sync: false
       - key: PREVIEW_AUTH_ENABLED
         value: "false"
       - key: MAX_ARTISTS
