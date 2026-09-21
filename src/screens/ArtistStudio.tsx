@@ -1,4 +1,5 @@
 import { ArrowLeft, BarChart3, Eye, Heart, ImagePlus, Plus, ShoppingBag, Sparkles } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { useStore } from "../store";
 import type { Artwork, ArtworkStatus } from "../types";
@@ -81,6 +82,9 @@ export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onO
     basket: sum.basket + artwork.stats.basketAdds,
     ar: sum.ar + artwork.stats.arTries,
   }), { views: 0, likes: 0, basket: 0, ar: 0 });
+  const statCards: Array<[string, number, LucideIcon]> = [
+    ["Views", totals.views, Eye], ["Likes", totals.likes, Heart], ["Basket", totals.basket, ShoppingBag], ["AR tries", totals.ar, BarChart3],
+  ];
 
   return (
     <div className="page-shell !pb-10">
@@ -95,7 +99,7 @@ export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onO
           <section className="rounded-[28px] bg-[#24362e] p-5 text-white">
             <div className="flex items-center justify-between"><div><p className="text-xs text-white/55">Published portfolio</p><h2 className="mt-1 font-serif text-3xl">{artworks.filter((artwork) => artwork.status === "published").length} artworks</h2></div><Sparkles className="text-[#d8c8ad]" /></div>
             <div className="mt-5 grid grid-cols-4 gap-2">
-              {[["Views", totals.views, Eye], ["Likes", totals.likes, Heart], ["Basket", totals.basket, ShoppingBag], ["AR tries", totals.ar, BarChart3]].map(([label, value, Icon]) => (
+              {statCards.map(([label, value, Icon]) => (
                 <div key={String(label)} className="rounded-2xl bg-white/8 p-2 text-center"><Icon size={15} className="mx-auto mb-1 text-white/50" /><strong className="block text-sm">{String(value)}</strong><span className="text-[8px] uppercase tracking-wide text-white/45">{String(label)}</span></div>
               ))}
             </div>
