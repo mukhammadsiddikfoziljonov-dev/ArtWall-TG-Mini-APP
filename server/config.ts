@@ -8,11 +8,13 @@ const numberFromEnv = (key: string, fallback: number) => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
+const verifiedPostgresUrl = (value: string) => value.replace(/([?&])sslmode=require(?=&|$)/, "$1sslmode=verify-full");
+
 export const config = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: Number(process.env.PORT || process.env.API_PORT || 3001),
   appOrigin: process.env.APP_ORIGIN || "http://localhost:3000",
-  databaseUrl: process.env.DATABASE_URL || "",
+  databaseUrl: verifiedPostgresUrl(process.env.DATABASE_URL || ""),
   sessionSecret: process.env.SESSION_SECRET || "local-preview-only-change-me",
   botToken: process.env.TELEGRAM_BOT_TOKEN || "",
   adminTelegramIds: new Set((process.env.ADMIN_TELEGRAM_IDS || "").split(",").map((id) => id.trim()).filter(Boolean)),

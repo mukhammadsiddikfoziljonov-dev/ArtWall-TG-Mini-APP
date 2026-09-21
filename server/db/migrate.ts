@@ -6,7 +6,8 @@ import { Client } from "pg";
 loadEnv({ path: ".env.local" });
 loadEnv();
 
-const connectionString = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
+const connectionString = (process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || "")
+  .replace(/([?&])sslmode=require(?=&|$)/, "$1sslmode=verify-full");
 if (!connectionString) throw new Error("DATABASE_URL_UNPOOLED or DATABASE_URL is required");
 
 const client = new Client({ connectionString });
