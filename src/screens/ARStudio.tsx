@@ -9,6 +9,12 @@ import { t, type Language } from "../i18n";
 type Mode = "move" | "rotate" | "scale";
 type Panel = "size" | "frame" | "room" | null;
 
+const ROOM_PRESETS = [
+  { id: "living-room", name: "Living room", image: "/sample-rooms/living-room.jpeg" },
+  { id: "bedroom", name: "Bedroom", image: "/sample-rooms/bedroom.jpeg" },
+  { id: "office", name: "Office", image: "/sample-rooms/office.jpeg" },
+] as const;
+
 export function ARStudio({ artwork, language, onBack, demoMode = false }: { artwork: Artwork; language: Language; onBack: () => void; demoMode?: boolean }) {
   const { addToBasket, basket, isLiked, toggleLike, saveView, track } = useStore();
   const [mode, setMode] = useState<Mode>("move");
@@ -22,7 +28,8 @@ export function ARStudio({ artwork, language, onBack, demoMode = false }: { artw
   const [material, setMaterial] = useState<"solid" | "wood" | "metal">("wood");
   const [frameThickness, setFrameThickness] = useState(4);
   const [matting, setMatting] = useState(3);
-  const [roomImage, setRoomImage] = useState("https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1600&q=85");
+  const [roomImage, setRoomImage] = useState<string>(ROOM_PRESETS[0].image);
+  const [selectedRoom, setSelectedRoom] = useState<string>(ROOM_PRESETS[0].id);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
   const [cameraError, setCameraError] = useState("");
@@ -147,8 +154,16 @@ export function ARStudio({ artwork, language, onBack, demoMode = false }: { artw
   const handleRoom = (file?: File) => {
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => { stopCamera(); setRoomImage(String(reader.result)); setPanel(null); };
+    reader.onload = () => { stopCamera(); setSelectedRoom(""); setRoomImage(String(reader.result)); setPanel(null); };
     reader.readAsDataURL(file);
+  };
+
+  const selectRoom = (room: (typeof ROOM_PRESETS)[number]) => {
+    stopCamera();
+    setCameraError("");
+    setSelectedRoom(room.id);
+    setRoomImage(room.image);
+    setPanel(null);
   };
 
   const pointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -180,7 +195,7 @@ export function ARStudio({ artwork, language, onBack, demoMode = false }: { artw
 
   return (
     <div ref={stageRef} className="relative h-[100dvh] w-full overflow-hidden bg-black text-white">
-      {cameraActive && !frozenFrame ? <video ref={videoRef} autoPlay muted playsInline className="absolute inset-0 h-full w-full object-cover" /> : <img src={frozenFrame || roomImage} className="absolute inset-0 h-full w-full object-cover" alt="Room" />}
+      {cameraActive && !frozenFrame ? <video ref={videoRef} autoPlay muted playsInline className="absolute inset-0 h-full w-full object-cover" /> : <img src={frozenFrame || roomImage} className="absolute inset-0 h-full w-full object-cover" alt={selectedRoom ? `${ROOM_PRESETS.find((room) => room.id === selectedRoom)?.name} sample room` : "Your room"} />}
       <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/35" />
 
       {!capturing && <header className="absolute inset-x-0 top-0 z-30 flex items-center justify-between p-4 pt-[max(1rem,env(safe-area-inset-top))]">
@@ -230,6 +245,15 @@ export function ARStudio({ artwork, language, onBack, demoMode = false }: { artw
             <div className="grid grid-cols-2 gap-4"><Range label="Frame" value={frameThickness} min={1} max={10} unit="cm" onChange={setFrameThickness} /><Range label="Matting" value={matting} min={0} max={15} unit="cm" onChange={setMatting} /></div>
           </div>}
           {panel === "room" && <div className="space-y-2">
+            <div className="pb-2">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-[.16em] text-stone-400">Sample rooms</p>
+              <div className="grid grid-cols-3 gap-2">
+                {ROOM_PRESETS.map((room) => <button key={room.id} type="button" onClick={() => selectRoom(room)} aria-pressed={selectedRoom === room.id} className={`overflow-hidden rounded-2xl border bg-stone-50 text-left transition ${selectedRoom === room.id && !cameraActive ? "border-[#667b6e] ring-2 ring-[#667b6e]/20" : "border-stone-200"}`}>
+                  <img src={room.image} alt="" loading="lazy" className="h-20 w-full object-cover" />
+                  <span className="flex items-center justify-between px-2.5 py-2 text-[10px] font-bold text-stone-700">{room.name}{selectedRoom === room.id && !cameraActive && <Check size={13} className="text-[#667b6e]" />}</span>
+                </button>)}
+              </div>
+            </div>
             <button onClick={cameraActive ? stopCamera : startCamera} className="primary-button w-full"><Camera size={17} /> {cameraActive ? "Stop camera" : cameraStarting ? "Starting camera…" : t(language, "liveCamera")}</button>
             <button onClick={() => roomInputRef.current?.click()} className="secondary-button w-full"><ImagePlus size={17} /> {t(language, "uploadRoom")}</button>
             <input ref={roomInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => handleRoom(event.target.files?.[0])} />
