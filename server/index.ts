@@ -258,7 +258,12 @@ app.post("/api/auth/preview", authLimiter, async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
-app.get("/api/bootstrap", auth, async (request: AuthedRequest, response, next) => { try { response.json({ user: toUser(request.user!), state: await getState(request.user!) }); } catch (error) { next(error); } });
+app.get("/api/bootstrap", auth, async (request: AuthedRequest, response, next) => {
+  try {
+    if (request.user!.onboardingCompletedAt) void syncLeadToSheet(request.user!).catch((error) => console.error("Lead Sheet refresh failed", error));
+    response.json({ user: toUser(request.user!), state: await getState(request.user!) });
+  } catch (error) { next(error); }
+});
 
 app.post("/api/signup", auth, async (request: AuthedRequest, response, next) => {
   try {

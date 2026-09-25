@@ -24,30 +24,30 @@ function doPost(e) {
     const lastRow = sheet.getLastRow();
     let targetRow = Math.max(5, lastRow + 1);
     if (lastRow >= 5) {
-      const userIds = sheet.getRange(5, 2, lastRow - 4, 1).getDisplayValues().flat();
+      const userIds = sheet.getRange(5, 14, lastRow - 4, 1).getDisplayValues().flat();
       const existingIndex = userIds.indexOf(String(payload.userId));
       if (existingIndex >= 0) targetRow = existingIndex + 5;
     }
 
     const values = [[
       new Date(payload.signupTime),
-      String(payload.userId),
-      String(payload.source || ""),
-      String(payload.telegramId || ""),
-      String(payload.telegramUsername || ""),
       String(payload.fullName),
       String(payload.phone),
       String(payload.role || "buyer"),
-      String(payload.consent || "yes"),
+      String(payload.source || ""),
+      String(payload.telegramUsername || ""),
       Number(payload.arDemoOpens || 0),
       Number(payload.cameraStarts || 0),
       Number(payload.viewsSaved || 0),
       Number(payload.shares || 0),
       new Date(payload.lastActivity),
+      String(payload.consent || "yes"),
+      String(payload.telegramId || ""),
+      String(payload.userId),
     ]];
     sheet.getRange(targetRow, 1, 1, values[0].length).setValues(values);
     sheet.getRange(targetRow, 1).setNumberFormat("yyyy-mm-dd hh:mm");
-    sheet.getRange(targetRow, 14).setNumberFormat("yyyy-mm-dd hh:mm");
+    sheet.getRange(targetRow, 11).setNumberFormat("yyyy-mm-dd hh:mm");
     return jsonResponse({ ok: true, row: targetRow });
   } catch (error) {
     console.error(error);
