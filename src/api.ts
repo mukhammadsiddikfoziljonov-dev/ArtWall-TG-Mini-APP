@@ -1,13 +1,19 @@
 const TOKEN_KEY = "artwall-api-token";
+const VISITOR_KEY = "artwall-visitor-id";
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 
 export async function authenticate(role: "buyer" | "artist" | "admin") {
   const telegram = window.Telegram?.WebApp;
-  const endpoint = telegram?.initData ? "/api/auth/telegram" : "/api/auth/preview";
+  const endpoint = telegram?.initData ? "/api/auth/telegram" : import.meta.env.DEV ? "/api/auth/preview" : "/api/auth/visitor";
   const startParam = telegram?.initDataUnsafe?.start_param?.toLowerCase() ?? "";
   const requestedRole = startParam.startsWith("artist") ? "artist" : "buyer";
-  const body = telegram?.initData ? { initData: telegram.initData, requestedRole } : { role };
+  let visitorId = localStorage.getItem(VISITOR_KEY);
+  if (!visitorId) {
+    visitorId = crypto.randomUUID();
+    localStorage.setItem(VISITOR_KEY, visitorId);
+  }
+  const body = telegram?.initData ? { initData: telegram.initData, requestedRole } : import.meta.env.DEV ? { role } : { visitorId };
   const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!response.ok) throw new Error((await response.json()).error || "Authentication failed");
   const data = await response.json();

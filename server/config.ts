@@ -28,6 +28,8 @@ export const config = {
   storageRegion: process.env.AWS_REGION || "",
   storageAccessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
   storageSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
+  leadsWebhookUrl: process.env.LEADS_WEBHOOK_URL || "",
+  leadsWebhookSecret: process.env.LEADS_WEBHOOK_SECRET || "",
 };
 
 if (!config.databaseUrl) throw new Error("DATABASE_URL is required");

@@ -7,7 +7,7 @@ import type { Role } from "../types";
 export function Profile({ language, onArtist, onAdmin }: { language: Language; onArtist: () => void; onAdmin: () => void }) {
   const { currentUser, state, isTelegram, setDemoRole, updateProfile } = useStore();
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ name: currentUser.name, bio: currentUser.bio ?? "", location: currentUser.location ?? "", social: currentUser.social ?? "" });
+  const [form, setForm] = useState({ name: currentUser.name, phone: currentUser.phone ?? "", bio: currentUser.bio ?? "", location: currentUser.location ?? "", social: currentUser.social ?? "" });
   const views = state.savedViews.filter((view) => view.userId === currentUser.id);
 
   const save = () => {
@@ -17,7 +17,7 @@ export function Profile({ language, onArtist, onAdmin }: { language: Language; o
 
   return (
     <div className="page-shell">
-      {!isTelegram && (
+      {import.meta.env.DEV && !isTelegram && (
         <div className="mb-5 rounded-2xl border border-[#d7ccb9] bg-[#fff9ec] p-3">
           <p className="mb-2 text-[10px] font-bold uppercase tracking-[.16em] text-[#8a6b35]">Preview identity</p>
           <div className="grid grid-cols-3 gap-2">
@@ -43,6 +43,7 @@ export function Profile({ language, onArtist, onAdmin }: { language: Language; o
       {editing && (
         <div className="mt-4 space-y-3 rounded-[24px] bg-white p-4 shadow-sm">
           <input className="field" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Display name" />
+          <input className="field" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="Phone number" inputMode="tel" />
           <textarea className="field min-h-24 resize-none" value={form.bio} onChange={(e) => setForm({ ...form, bio: e.target.value })} placeholder="Short biography" />
           <input className="field" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Location" />
           <input className="field" value={form.social} onChange={(e) => setForm({ ...form, social: e.target.value })} placeholder="Social link" />
@@ -53,7 +54,7 @@ export function Profile({ language, onArtist, onAdmin }: { language: Language; o
       <div className="mt-5 space-y-2">
         {currentUser.roles.includes("artist") && <button onClick={onArtist} className="menu-row"><span className="menu-icon bg-[#e7ded0] text-[#765c38]"><Palette size={18} /></span><span className="flex-1 text-left"><strong>{t(language, "artistStudio")}</strong><small>Manage profile and up to 5 artworks</small></span><ChevronRight size={18} /></button>}
         {currentUser.roles.includes("admin") && <button onClick={onAdmin} className="menu-row"><span className="menu-icon bg-[#dfe9df] text-[#355343]"><BarChart3 size={18} /></span><span className="flex-1 text-left"><strong>{t(language, "admin")}</strong><small>Platform activity and performance</small></span><ChevronRight size={18} /></button>}
-        <div className="menu-row"><span className="menu-icon bg-[#ece7f4] text-[#625176]"><ShieldCheck size={18} /></span><span className="flex-1"><strong>Telegram account</strong><small>{isTelegram ? "Verified Telegram session" : "Preview mode"}</small></span></div>
+        <div className="menu-row"><span className="menu-icon bg-[#ece7f4] text-[#625176]"><ShieldCheck size={18} /></span><span className="flex-1"><strong>{isTelegram ? "Telegram account" : "Browser demo access"}</strong><small>{isTelegram ? "Verified Telegram session" : "Signup verified for this device"}</small></span></div>
       </div>
 
       <div className="mt-8">

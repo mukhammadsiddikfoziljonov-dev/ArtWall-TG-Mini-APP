@@ -9,7 +9,7 @@ import { t, type Language } from "../i18n";
 type Mode = "move" | "rotate" | "scale";
 type Panel = "size" | "frame" | "room" | null;
 
-export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; language: Language; onBack: () => void }) {
+export function ARStudio({ artwork, language, onBack, demoMode = false }: { artwork: Artwork; language: Language; onBack: () => void; demoMode?: boolean }) {
   const { addToBasket, basket, isLiked, toggleLike, saveView, track } = useStore();
   const [mode, setMode] = useState<Mode>("move");
   const [panel, setPanel] = useState<Panel>(null);
@@ -36,8 +36,8 @@ export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; lang
   const roomInputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef({ x: 0, y: 0, px: 0, py: 0, rx: 0, ry: 0, scale: 1 });
   const trackedStartRef = useRef(false);
-  const added = basket.some((item) => item.artworkId === artwork.id);
-  const liked = isLiked(artwork.id);
+  const added = !demoMode && basket.some((item) => item.artworkId === artwork.id);
+  const liked = !demoMode && isLiked(artwork.id);
 
   const notify = (message: string) => {
     setToast(message);
@@ -60,7 +60,7 @@ export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; lang
       stopCamera();
       streamRef.current = stream;
       setCameraActive(true);
-      track("ar_camera_started", artwork.id);
+      track("ar_camera_started", demoMode ? undefined : artwork.id);
     } catch {
       setCameraError("Camera permission was not granted. Upload a room photo instead.");
     } finally {
@@ -71,10 +71,10 @@ export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; lang
   useEffect(() => {
     if (!trackedStartRef.current) {
       trackedStartRef.current = true;
-      track("ar_started", artwork.id);
+      track("ar_started", demoMode ? undefined : artwork.id);
     }
     return () => streamRef.current?.getTracks().forEach((track) => track.stop());
-  }, [artwork.id]);
+  }, [artwork.id, demoMode]);
 
   useEffect(() => {
     if (cameraActive && videoRef.current && streamRef.current) {
@@ -111,8 +111,17 @@ export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; lang
   const save = async () => {
     const image = await capture();
     if (!image) return;
-    saveView(artwork.id, image);
-    notify("View saved to your profile");
+    if (demoMode) {
+      const link = document.createElement("a");
+      link.download = "artwall-ar-demo.jpg";
+      link.href = image;
+      link.click();
+      track("ar_view_saved");
+      notify("View saved to your device");
+    } else {
+      saveView(artwork.id, image);
+      notify("View saved to your profile");
+    }
   };
 
   const share = async () => {
@@ -129,7 +138,7 @@ export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; lang
         link.href = image;
         link.click();
       }
-      track("ar_view_shared", artwork.id);
+      track("ar_view_shared", demoMode ? undefined : artwork.id);
     } catch {
       notify("Sharing was cancelled");
     }
@@ -198,6 +207,8 @@ export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; lang
         </div>
       </div>
 
+      {!capturing && demoMode && !cameraActive && <button onClick={startCamera} disabled={cameraStarting} className="absolute bottom-32 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full bg-white px-5 py-3 text-xs font-bold text-[#24362e] shadow-xl disabled:opacity-60"><Camera size={17} />{cameraStarting ? "Starting camera…" : "Use live camera"}</button>}
+
       {!capturing && <div className="absolute left-1/2 top-24 z-30 flex -translate-x-1/2 rounded-full bg-black/45 p-1 backdrop-blur-xl">
         {([["move", Move], ["rotate", RotateCw], ["scale", Maximize2]] as const).map(([item, Icon]) => <button key={item} onClick={() => setMode(item)} className={`flex items-center gap-1.5 rounded-full px-3 py-2 text-[10px] font-bold uppercase tracking-wider ${mode === item ? "bg-white text-black" : "text-white/65"}`}><Icon size={14} /> {item}</button>)}
       </div>}
@@ -233,10 +244,10 @@ export function ARStudio({ artwork, language, onBack }: { artwork: Artwork; lang
       </div>}
 
       {!capturing && <footer className="absolute inset-x-0 bottom-0 z-30 flex items-center justify-center gap-2 border-t border-white/10 bg-black/45 p-3 pb-[max(.75rem,env(safe-area-inset-bottom))] backdrop-blur-xl">
-        <button onClick={() => toggleLike(artwork.id)} className={`ar-footer-button ${liked ? "!bg-[#ff6b59]" : ""}`} aria-label="Like"><Heart size={18} fill={liked ? "currentColor" : "none"} /></button>
+        {!demoMode && <button onClick={() => toggleLike(artwork.id)} className={`ar-footer-button ${liked ? "!bg-[#ff6b59]" : ""}`} aria-label="Like"><Heart size={18} fill={liked ? "currentColor" : "none"} /></button>}
         <button onClick={save} className="ar-footer-button"><Check size={18} /><span>{t(language, "save")}</span></button>
         <button onClick={share} className="ar-footer-button"><Share2 size={18} /><span>{t(language, "share")}</span></button>
-        <button onClick={() => { addToBasket(artwork.id); notify("Added to basket"); }} className={`ar-footer-button ${added ? "!bg-[#667b6e]" : ""}`}><ShoppingBag size={18} /><span>{added ? t(language, "added") : "Basket"}</span></button>
+        {!demoMode && <button onClick={() => { addToBasket(artwork.id); notify("Added to basket"); }} className={`ar-footer-button ${added ? "!bg-[#667b6e]" : ""}`}><ShoppingBag size={18} /><span>{added ? t(language, "added") : "Basket"}</span></button>}
         {cameraActive && <button onClick={stopCamera} className="ar-footer-button" aria-label="Stop camera"><VideoOff size={18} /></button>}
       </footer>}
     </div>

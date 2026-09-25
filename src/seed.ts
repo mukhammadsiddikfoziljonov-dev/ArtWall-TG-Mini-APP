@@ -6,6 +6,7 @@ export const demoUsers: User[] = [
   {
     id: "artist-a",
     telegramId: "10001",
+    source: "preview",
     name: "Mira Safina",
     username: "mirasafina",
     avatarUrl: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=240&q=80",
@@ -18,6 +19,7 @@ export const demoUsers: User[] = [
   {
     id: "artist-b",
     telegramId: "10002",
+    source: "preview",
     name: "Anton Reyes",
     username: "antonreyes",
     avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=240&q=80",
@@ -85,3 +87,4 @@ export const initialState: PlatformState = {
   savedViews: [],
   events: [],
 };
+

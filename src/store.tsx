@@ -25,9 +25,12 @@ type StoreValue = {
   state: PlatformState;
   currentUser: User;
   isTelegram: boolean;
+  authReady: boolean;
+  authError: string;
   setDemoRole: (role: Role) => void;
   updateProfile: (data: Partial<User>) => void;
   chooseRole: (role: "buyer" | "artist") => void;
+  completeSignup: (data: { name: string; phone: string; role: "buyer" | "artist"; consent: true }) => Promise<{ ok: boolean; message?: string }>;
   toggleLike: (artworkId: string) => void;
   isLiked: (artworkId: string) => boolean;
   addToBasket: (artworkId: string) => void;
@@ -54,6 +57,7 @@ const readState = (): PlatformState => {
 const makePreviewUser = (role: Role): User => ({
   id: `preview-${role}`,
   telegramId: role === "admin" ? "999001" : role === "artist" ? "999002" : "999003",
+  source: "preview",
   name: role === "admin" ? "ArtWall Admin" : role === "artist" ? "Demo Artist" : "Telegram Buyer",
   username: role === "admin" ? "artwall_admin" : role === "artist" ? "demo_artist" : "artwall_buyer",
   roles: role === "admin" ? ["buyer", "artist", "admin"] : role === "artist" ? ["buyer", "artist"] : ["buyer"],
@@ -64,6 +68,9 @@ const makePreviewUser = (role: Role): User => ({
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<PlatformState>(readState);
+  const [sessionUser, setSessionUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState("");
   const [demoRole, setDemoRoleState] = useState<Role>(() => (localStorage.getItem(DEMO_USER_KEY) as Role) || "buyer");
   const telegramUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
   const isTelegram = Boolean(telegramUser && window.Telegram?.WebApp?.initData);
@@ -74,6 +81,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return {
       id: `tg-${telegramUser.id}`,
       telegramId: String(telegramUser.id),
+      source: "telegram",
       name: [telegramUser.first_name, telegramUser.last_name].filter(Boolean).join(" "),
       username: telegramUser.username,
       avatarUrl: telegramUser.photo_url,
@@ -82,8 +90,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, [telegramUser?.id, demoRole]);
 
-  const persistedUser = state.users.find((user) => user.telegramId === baseUser.telegramId);
-  const currentUser = persistedUser ?? baseUser;
+  const persistedUser = state.users.find((user) => user.id === sessionUser?.id || (baseUser.telegramId && user.telegramId === baseUser.telegramId));
+  const currentUser = persistedUser ?? sessionUser ?? baseUser;
 
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
@@ -95,18 +103,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     authenticate(demoRole)
-      .then(() => api<{ state: PlatformState }>("/api/bootstrap"))
+      .then((data: { user: User }) => {
+        if (!cancelled) setSessionUser(data.user);
+        return api<{ user: User; state: PlatformState }>("/api/bootstrap");
+      })
       .then((data) => {
-        if (!cancelled) setState(data.state);
+        if (!cancelled) {
+          setSessionUser(data.user);
+          setState(data.state);
+          setAuthError("");
+          setAuthReady(true);
+        }
       })
       .catch((error) => {
-        console.warn("API unavailable; continuing with the local preview store.", error);
+        console.warn("Authentication failed.", error);
+        if (!cancelled) {
+          setAuthError(error instanceof Error ? error.message : "Unable to sign in");
+          setAuthReady(true);
+        }
       });
     return () => { cancelled = true; };
   }, [demoRole]);
 
   useEffect(() => {
     setState((previous) => {
+      if (import.meta.env.PROD) return previous;
       if (previous.users.some((user) => user.telegramId === baseUser.telegramId)) return previous;
       return { ...previous, users: [...previous.users, baseUser] };
     });
@@ -142,6 +163,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       users: previous.users.map((user) => user.telegramId === currentUser.telegramId ? { ...user, roles } : user),
     }));
     void api("/api/profile/role", { method: "POST", body: JSON.stringify({ role }) }).catch(console.warn);
+  };
+
+  const completeSignup: StoreValue["completeSignup"] = async (data) => {
+    try {
+      const result = await api<{ user: User }>("/api/signup", { method: "POST", body: JSON.stringify(data) });
+      const refreshed = await api<{ user: User; state: PlatformState }>("/api/bootstrap");
+      setSessionUser(result.user);
+      setState(refreshed.state);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : "Unable to complete signup" };
+    }
   };
 
   const track = (name: AnalyticsEventName, artworkId?: string) => {
@@ -234,7 +267,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     void api("/api/views", { method: "POST", body: JSON.stringify({ artworkId, imageDataUrl }) }).catch(console.warn);
   };
 
-  return <StoreContext.Provider value={{ state, currentUser, isTelegram, setDemoRole, updateProfile, chooseRole, toggleLike, isLiked, addToBasket, removeFromBasket, basket, createArtwork, updateArtwork, saveView, track }}>{children}</StoreContext.Provider>;
+  return <StoreContext.Provider value={{ state, currentUser, isTelegram, authReady, authError, setDemoRole, updateProfile, chooseRole, completeSignup, toggleLike, isLiked, addToBasket, removeFromBasket, basket, createArtwork, updateArtwork, saveView, track }}>{children}</StoreContext.Provider>;
 }
 
 export const useStore = () => {

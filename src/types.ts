@@ -4,13 +4,17 @@ export type ArtworkStatus = "draft" | "published";
 export interface User {
   id: string;
   telegramId: string;
+  source: "telegram" | "web" | "preview";
   name: string;
   username?: string;
   avatarUrl?: string;
+  phone?: string;
   roles: Role[];
   bio?: string;
   location?: string;
   social?: string;
+  consentAt?: string;
+  onboardingCompletedAt?: string;
   createdAt: string;
 }
 
@@ -66,6 +70,7 @@ export type AnalyticsEventName =
   | "ar_camera_started"
   | "ar_view_saved"
   | "ar_view_shared"
+  | "signup_completed"
   | "artist_profile_opened";
 
 export interface AnalyticsEvent {
@@ -84,3 +89,4 @@ export interface PlatformState {
   savedViews: SavedView[];
   events: AnalyticsEvent[];
 }
+

@@ -3,7 +3,7 @@ import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
-import { and, asc, count, desc, eq, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { config } from "./config.ts";
 import { db, pool } from "./db/client.ts";
@@ -28,7 +28,7 @@ app.use("/api", rateLimit({ windowMs: 15 * 60 * 1000, limit: 500, standardHeader
 
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 40, standardHeaders: "draft-8", legacyHeaders: false });
 const uploadLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false });
-const allowedEvents: AnalyticsEventName[] = ["artwork_impression", "artwork_opened", "artwork_liked", "basket_added", "basket_removed", "ar_started", "ar_camera_started", "ar_view_saved", "ar_view_shared", "artist_profile_opened"];
+const allowedEvents: AnalyticsEventName[] = ["artwork_impression", "artwork_opened", "artwork_liked", "basket_added", "basket_removed", "ar_started", "ar_camera_started", "ar_view_saved", "ar_view_shared", "signup_completed", "artist_profile_opened"];
 
 type SessionPayload = { userId: string; exp: number };
 type DbUser = typeof users.$inferSelect;
@@ -44,9 +44,10 @@ class HttpError extends Error {
 }
 
 const toUser = (user: DbUser, exposeTelegramId = true): User => ({
-  id: user.id, telegramId: exposeTelegramId ? user.telegramId : "", name: user.name,
-  username: user.username || undefined, avatarUrl: user.avatarUrl || undefined, roles: user.roles as Role[],
+  id: user.id, telegramId: exposeTelegramId && user.source === "telegram" ? user.telegramId : "", source: user.source as User["source"], name: user.name,
+  username: user.username || undefined, avatarUrl: user.avatarUrl || undefined, phone: exposeTelegramId ? user.phone || undefined : undefined, roles: user.roles as Role[],
   bio: user.bio || undefined, location: user.location || undefined, social: user.social || undefined, createdAt: user.createdAt.toISOString(),
+  consentAt: user.consentAt?.toISOString(), onboardingCompletedAt: user.onboardingCompletedAt?.toISOString(),
 });
 
 const signSession = (payload: SessionPayload) => {
@@ -80,6 +81,11 @@ const auth = async (request: AuthedRequest, _response: Response, next: NextFunct
   } catch (error) { next(error); }
 };
 
+const onboarded = (request: AuthedRequest, _response: Response, next: NextFunction) => {
+  if (!request.user?.onboardingCompletedAt) return next(new HttpError(403, "Complete signup to unlock the AR demo"));
+  next();
+};
+
 const validateTelegramInitData = (initData: string) => {
   if (!config.botToken) throw new HttpError(503, "Telegram authentication is not configured yet");
   const params = new URLSearchParams(initData);
@@ -100,26 +106,36 @@ const validateTelegramInitData = (initData: string) => {
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 const countRole = async (transaction: Transaction, role: "artist" | "buyer") => {
   const condition = role === "artist" ? sql`${role} = ANY(${users.roles})` : sql`NOT ('artist' = ANY(${users.roles}))`;
-  const [result] = await transaction.select({ value: count() }).from(users).where(condition);
+  const [result] = await transaction.select({ value: count() }).from(users).where(and(condition, isNotNull(users.onboardingCompletedAt)));
   return Number(result.value);
 };
 
-const createTelegramUser = async (telegram: ReturnType<typeof validateTelegramInitData>, requestedRole: "buyer" | "artist") => db.transaction(async (tx) => {
+const createTelegramUser = async (telegram: ReturnType<typeof validateTelegramInitData>) => db.transaction(async (tx) => {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(87421001)`);
   const telegramId = String(telegram.id);
-  const [existing] = await tx.select().from(users).where(eq(users.telegramId, telegramId)).limit(1);
-  if (existing) return existing;
   const isAdmin = config.adminTelegramIds.has(telegramId);
-  if (requestedRole === "artist" || isAdmin) {
-    if (!isAdmin && await countRole(tx, "artist") >= config.maxArtists) throw new HttpError(409, "The artist beta is full. Join the waitlist for the next opening.");
-  } else if (await countRole(tx, "buyer") >= config.maxBuyers) throw new HttpError(409, "The buyer beta is full. Artist invitations can still register with an artist start link.");
-  const roles: Role[] = isAdmin ? ["buyer", "artist", "admin"] : requestedRole === "artist" ? ["buyer", "artist"] : ["buyer"];
-  const [created] = await tx.insert(users).values({ telegramId, name: [telegram.first_name, telegram.last_name].filter(Boolean).join(" "), username: telegram.username, avatarUrl: telegram.photo_url, roles }).returning();
+  const [existing] = await tx.select().from(users).where(eq(users.telegramId, telegramId)).limit(1);
+  const name = [telegram.first_name, telegram.last_name].filter(Boolean).join(" ");
+  if (existing) {
+    const roles: Role[] = isAdmin ? [...new Set([...existing.roles, "buyer", "artist", "admin"])] as Role[] : existing.roles as Role[];
+    const [updated] = await tx.update(users).set({ name: existing.onboardingCompletedAt ? existing.name : name, username: telegram.username, avatarUrl: telegram.photo_url, roles, source: "telegram", updatedAt: new Date() }).where(eq(users.id, existing.id)).returning();
+    return updated;
+  }
+  const roles: Role[] = isAdmin ? ["buyer", "artist", "admin"] : ["buyer"];
+  const [created] = await tx.insert(users).values({ telegramId, source: "telegram", name, username: telegram.username, avatarUrl: telegram.photo_url, roles }).returning();
   return created;
 });
 
+const signupSchema = z.object({
+  name: z.string().trim().min(2, "Enter your full name").max(100),
+  phone: z.string().trim().min(7, "Enter a valid phone number").max(25).regex(/^[+0-9()\-\s]+$/, "Enter a valid phone number"),
+  role: z.enum(["buyer", "artist"]),
+  consent: z.literal(true, { error: "Consent is required" }),
+}).strict();
+
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(), bio: z.string().trim().max(600).optional(),
+  phone: z.string().trim().min(7).max(25).regex(/^[+0-9()\-\s]+$/).optional(),
   location: z.string().trim().max(120).optional(), social: z.string().trim().max(120).optional(), avatarUrl: z.string().url().max(2000).optional(),
 }).strict();
 
@@ -131,6 +147,45 @@ const artworkSchema = z.object({
 }).strict();
 const artworkPatchSchema = artworkSchema.omit({ images: true }).partial().strict();
 const eventSchema = z.object({ name: z.enum(allowedEvents as [AnalyticsEventName, ...AnalyticsEventName[]]), artworkId: z.string().uuid().optional() }).strict();
+
+const syncLeadToSheet = async (user: DbUser) => {
+  if (!config.leadsWebhookUrl || !config.leadsWebhookSecret || !user.onboardingCompletedAt) return false;
+  const eventRows = await db.select({ name: analyticsEvents.name, createdAt: analyticsEvents.createdAt }).from(analyticsEvents).where(eq(analyticsEvents.userId, user.id));
+  const countEvent = (name: AnalyticsEventName) => eventRows.filter((event) => event.name === name).length;
+  const lastActivity = eventRows.reduce((latest, event) => event.createdAt > latest ? event.createdAt : latest, user.updatedAt);
+  const response = await fetch(config.leadsWebhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      secret: config.leadsWebhookSecret,
+      signupTime: user.onboardingCompletedAt.toISOString(),
+      userId: user.id,
+      source: user.source,
+      telegramId: user.source === "telegram" ? user.telegramId : "",
+      telegramUsername: user.username || "",
+      fullName: user.name,
+      phone: user.phone || "",
+      role: user.roles.includes("artist") ? "artist" : "buyer",
+      consent: user.consentAt ? "yes" : "no",
+      arDemoOpens: countEvent("ar_started"),
+      cameraStarts: countEvent("ar_camera_started"),
+      viewsSaved: countEvent("ar_view_saved"),
+      shares: countEvent("ar_view_shared"),
+      lastActivity: lastActivity.toISOString(),
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) throw new Error(`Lead Sheet webhook returned ${response.status}`);
+  const result = await response.json().catch(() => ({ ok: false }));
+  if (!result.ok) throw new Error("Lead Sheet webhook rejected the update");
+  return true;
+};
+
+const refreshLeadSheet = async (userId: string) => {
+  if (!config.leadsWebhookUrl) return;
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (user) await syncLeadToSheet(user);
+};
 
 const getState = async (current: DbUser): Promise<PlatformState> => {
   const admin = current.roles.includes("admin");
@@ -178,7 +233,17 @@ app.get("/api/health", async (_request, response, next) => { try { await pool.qu
 app.post("/api/auth/telegram", authLimiter, async (request, response, next) => {
   try {
     const telegram = validateTelegramInitData(String(request.body.initData || ""));
-    response.json(issueSession(await createTelegramUser(telegram, request.body.requestedRole === "artist" ? "artist" : "buyer")));
+    response.json(issueSession(await createTelegramUser(telegram)));
+  } catch (error) { next(error); }
+});
+
+app.post("/api/auth/visitor", authLimiter, async (request, response, next) => {
+  try {
+    const visitorId = z.string().uuid().parse(request.body.visitorId);
+    const telegramId = `web:${visitorId}`;
+    const [user] = await db.insert(users).values({ telegramId, source: "web", name: "New visitor", roles: ["buyer"] })
+      .onConflictDoUpdate({ target: users.telegramId, set: { updatedAt: new Date() } }).returning();
+    response.json(issueSession(user));
   } catch (error) { next(error); }
 });
 
@@ -188,15 +253,38 @@ app.post("/api/auth/preview", authLimiter, async (request, response, next) => {
     const role = (["buyer", "artist", "admin"].includes(request.body.role) ? request.body.role : "buyer") as Role;
     const id = `preview-${role}`;
     const roles: Role[] = role === "admin" ? ["buyer", "artist", "admin"] : role === "artist" ? ["buyer", "artist"] : ["buyer"];
-    const [user] = await db.insert(users).values({ telegramId: id, name: role === "admin" ? "ArtWall Admin" : role === "artist" ? "Demo Artist" : "Telegram Buyer", username: id, roles, bio: role !== "buyer" ? "Contemporary artist building a collection on ArtWall." : undefined, location: role !== "buyer" ? "Tashkent, Uzbekistan" : undefined }).onConflictDoUpdate({ target: users.telegramId, set: { roles, updatedAt: new Date() } }).returning();
+    const [user] = await db.insert(users).values({ telegramId: id, source: "preview", name: role === "admin" ? "ArtWall Admin" : role === "artist" ? "Demo Artist" : "Telegram Buyer", username: id, roles, bio: role !== "buyer" ? "Contemporary artist building a collection on ArtWall." : undefined, location: role !== "buyer" ? "Tashkent, Uzbekistan" : undefined }).onConflictDoUpdate({ target: users.telegramId, set: { roles, updatedAt: new Date() } }).returning();
     response.json(issueSession(user));
   } catch (error) { next(error); }
 });
 
 app.get("/api/bootstrap", auth, async (request: AuthedRequest, response, next) => { try { response.json({ user: toUser(request.user!), state: await getState(request.user!) }); } catch (error) { next(error); } });
 
+app.post("/api/signup", auth, async (request: AuthedRequest, response, next) => {
+  try {
+    const input = signupSchema.parse(request.body);
+    const user = await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(87421003)`);
+      const [current] = await tx.select().from(users).where(eq(users.id, request.user!.id)).limit(1);
+      if (!current) throw new HttpError(404, "User not found");
+      if (current.onboardingCompletedAt) return current;
+      const isAdmin = current.roles.includes("admin");
+      if (input.role === "artist" && !isAdmin && await countRole(tx, "artist") >= config.maxArtists) throw new HttpError(409, "The artist beta is full");
+      if (input.role === "buyer" && await countRole(tx, "buyer") >= config.maxBuyers) throw new HttpError(409, "The buyer beta is full");
+      const roles: Role[] = input.role === "artist" ? ["buyer", "artist", ...(isAdmin ? ["admin" as const] : [])] : ["buyer", ...(isAdmin ? ["admin" as const] : [])];
+      const now = new Date();
+      const [updated] = await tx.update(users).set({ name: input.name, phone: input.phone, roles, consentAt: now, onboardingCompletedAt: now, updatedAt: now }).where(eq(users.id, current.id)).returning();
+      await tx.insert(analyticsEvents).values({ name: "signup_completed", userId: updated.id, metadata: { role: input.role, source: updated.source } });
+      return updated;
+    });
+    let sheetSynced = false;
+    try { sheetSynced = await syncLeadToSheet(user); } catch (error) { console.error("Lead Sheet sync failed", error); }
+    response.json({ user: toUser(user), sheetSynced });
+  } catch (error) { next(error); }
+});
+
 app.patch("/api/profile", auth, async (request: AuthedRequest, response, next) => {
-  try { const values = profileSchema.parse(request.body); const [user] = await db.update(users).set({ ...values, updatedAt: new Date() }).where(eq(users.id, request.user!.id)).returning(); response.json(toUser(user)); } catch (error) { next(error); }
+  try { const values = profileSchema.parse(request.body); const [user] = await db.update(users).set({ ...values, updatedAt: new Date() }).where(eq(users.id, request.user!.id)).returning(); void syncLeadToSheet(user).catch(console.error); response.json(toUser(user)); } catch (error) { next(error); }
 });
 
 app.post("/api/profile/role", auth, async (request: AuthedRequest, response, next) => {
@@ -213,11 +301,12 @@ app.post("/api/profile/role", auth, async (request: AuthedRequest, response, nex
       const [user] = await tx.update(users).set({ roles, updatedAt: new Date() }).where(eq(users.id, current.id)).returning();
       return user;
     });
+    void syncLeadToSheet(updated).catch(console.error);
     response.json(toUser(updated));
   } catch (error) { next(error); }
 });
 
-app.post("/api/likes/:artworkId/toggle", auth, async (request: AuthedRequest, response, next) => {
+app.post("/api/likes/:artworkId/toggle", auth, onboarded, async (request: AuthedRequest, response, next) => {
   try {
     const artworkId = z.string().uuid().parse(request.params.artworkId);
     const [artwork] = await db.select({ id: artworks.id }).from(artworks).where(eq(artworks.id, artworkId)).limit(1);
@@ -230,7 +319,7 @@ app.post("/api/likes/:artworkId/toggle", auth, async (request: AuthedRequest, re
   } catch (error) { next(error); }
 });
 
-app.post("/api/basket/:artworkId", auth, async (request: AuthedRequest, response, next) => {
+app.post("/api/basket/:artworkId", auth, onboarded, async (request: AuthedRequest, response, next) => {
   try {
     const artworkId = z.string().uuid().parse(request.params.artworkId);
     const [artwork] = await db.select({ id: artworks.id }).from(artworks).where(eq(artworks.id, artworkId)).limit(1);
@@ -241,7 +330,7 @@ app.post("/api/basket/:artworkId", auth, async (request: AuthedRequest, response
   } catch (error) { next(error); }
 });
 
-app.delete("/api/basket/:artworkId", auth, async (request: AuthedRequest, response, next) => {
+app.delete("/api/basket/:artworkId", auth, onboarded, async (request: AuthedRequest, response, next) => {
   try {
     const artworkId = z.string().uuid().parse(request.params.artworkId);
     const deleted = await db.delete(basketItems).where(and(eq(basketItems.userId, request.user!.id), eq(basketItems.artworkId, artworkId))).returning();
@@ -250,7 +339,7 @@ app.delete("/api/basket/:artworkId", auth, async (request: AuthedRequest, respon
   } catch (error) { next(error); }
 });
 
-app.post("/api/artworks", auth, uploadLimiter, async (request: AuthedRequest, response, next) => {
+app.post("/api/artworks", auth, onboarded, uploadLimiter, async (request: AuthedRequest, response, next) => {
   let objectKey = "";
   try {
     if (!request.user!.roles.includes("artist")) throw new HttpError(403, "Artist role required");
@@ -269,7 +358,7 @@ app.post("/api/artworks", auth, uploadLimiter, async (request: AuthedRequest, re
   } catch (error) { if (objectKey) await deleteImage(objectKey).catch(console.error); next(error); }
 });
 
-app.patch("/api/artworks/:artworkId", auth, async (request: AuthedRequest, response, next) => {
+app.patch("/api/artworks/:artworkId", auth, onboarded, async (request: AuthedRequest, response, next) => {
   try {
     const artworkId = z.string().uuid().parse(request.params.artworkId); const input = artworkPatchSchema.parse(request.body);
     const [existing] = await db.select().from(artworks).where(eq(artworks.id, artworkId)).limit(1);
@@ -287,7 +376,7 @@ app.patch("/api/artworks/:artworkId", auth, async (request: AuthedRequest, respo
   } catch (error) { next(error); }
 });
 
-app.post("/api/views", auth, uploadLimiter, async (request: AuthedRequest, response, next) => {
+app.post("/api/views", auth, onboarded, uploadLimiter, async (request: AuthedRequest, response, next) => {
   let objectKey = "";
   try {
     const artworkId = z.string().uuid().parse(request.body.artworkId); const image = parseImageDataUrl(request.body.imageDataUrl);
@@ -300,14 +389,14 @@ app.post("/api/views", auth, uploadLimiter, async (request: AuthedRequest, respo
   } catch (error) { if (objectKey) await deleteImage(objectKey).catch(console.error); next(error); }
 });
 
-app.post("/api/events", auth, async (request: AuthedRequest, response, next) => {
-  try { const event = eventSchema.parse(request.body); const [created] = await db.insert(analyticsEvents).values({ name: event.name, userId: request.user!.id, artworkId: event.artworkId }).returning(); response.status(201).json(created); } catch (error) { next(error); }
+app.post("/api/events", auth, onboarded, async (request: AuthedRequest, response, next) => {
+  try { const event = eventSchema.parse(request.body); const [created] = await db.insert(analyticsEvents).values({ name: event.name, userId: request.user!.id, artworkId: event.artworkId }).returning(); if (["ar_started", "ar_camera_started", "ar_view_saved", "ar_view_shared"].includes(event.name)) void refreshLeadSheet(request.user!.id).catch(console.error); response.status(201).json(created); } catch (error) { next(error); }
 });
 
-app.get("/api/admin/stats", auth, async (request: AuthedRequest, response, next) => {
+app.get("/api/admin/stats", auth, onboarded, async (request: AuthedRequest, response, next) => {
   try {
     if (!request.user!.roles.includes("admin")) throw new HttpError(403, "Admin role required");
-    const [userRows, artworkRows, likeRows, basketRows, eventRows, viewRows] = await Promise.all([db.select().from(users), db.select().from(artworks), db.select().from(likes), db.select().from(basketItems), db.select().from(analyticsEvents), db.select().from(savedViews)]);
+    const [userRows, artworkRows, likeRows, basketRows, eventRows, viewRows] = await Promise.all([db.select().from(users).where(isNotNull(users.onboardingCompletedAt)), db.select().from(artworks), db.select().from(likes), db.select().from(basketItems), db.select().from(analyticsEvents), db.select().from(savedViews)]);
     response.json({ users: userRows.length, buyers: userRows.filter((user) => !user.roles.includes("artist")).length, artists: userRows.filter((user) => user.roles.includes("artist")).length, artworks: artworkRows.length, likes: likeRows.length, inBaskets: basketRows.length, views: eventRows.filter((event) => event.name === "artwork_opened").length, arTries: eventRows.filter((event) => event.name === "ar_started").length, savedViews: viewRows.length });
   } catch (error) { next(error); }
 });

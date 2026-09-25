@@ -23,6 +23,18 @@ The Neon project has separate `development` and `production` branches. All schem
 4. Deploy. Render runs checks, then the start command applies versioned migrations before starting the service. The migration runner is idempotent, which makes this safe on free instances that do not support a separate pre-deploy command.
 5. Verify `https://<service>.onrender.com/api/health` returns `{"ok":true,"database":"connected"}`.
 
+## Private Google Sheets lead register
+
+The signup flow always writes to Postgres first. To mirror each completed signup and its AR-demo counters into the private `ArtWall AR Demo Leads` Google Sheet:
+
+1. Open the Sheet, choose **Extensions → Apps Script**, and paste `docs/google-apps-script.gs`.
+2. In Apps Script **Project Settings → Script properties**, create `ARTWALL_WEBHOOK_SECRET` with a long random value.
+3. Deploy the script as a Web app, execute it as yourself, and allow access to **Anyone**. The Sheet itself stays private; requests are rejected unless they contain the secret.
+4. Add the deployment URL to Render as `LEADS_WEBHOOK_URL` and the same secret as `LEADS_WEBHOOK_SECRET`.
+5. Redeploy and submit one test signup. The corresponding row is inserted or updated by User ID.
+
+Do not put either value in GitHub. If the webhook is unavailable, signup still succeeds because Postgres remains the source of truth; the user is never asked to repeat the form.
+
 Secrets stay in Render and Neon; do not add them to GitHub. Render creates `SESSION_SECRET` automatically.
 
 ## Connect Telegram last

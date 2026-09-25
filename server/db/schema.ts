@@ -4,13 +4,17 @@ import { boolean, index, integer, jsonb, numeric, pgTable, primaryKey, text, tim
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   telegramId: text("telegram_id").notNull(),
+  source: text("source").notNull().default("telegram"),
   name: text("name").notNull(),
   username: text("username"),
   avatarUrl: text("avatar_url"),
+  phone: text("phone"),
   roles: text("roles").array().notNull().default(sql`ARRAY['buyer']::text[]`),
   bio: text("bio"),
   location: text("location"),
   social: text("social"),
+  consentAt: timestamp("consent_at", { withTimezone: true }),
+  onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [uniqueIndex("users_telegram_id_unique").on(table.telegramId)]);
