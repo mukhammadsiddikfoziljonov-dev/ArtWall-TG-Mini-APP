@@ -27,6 +27,7 @@ app.use(express.json({ limit: "8mb" }));
 app.use("/api", rateLimit({ windowMs: 15 * 60 * 1000, limit: 500, standardHeaders: "draft-8", legacyHeaders: false }));
 
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 40, standardHeaders: "draft-8", legacyHeaders: false });
+const existingAccountLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, skipSuccessfulRequests: true, standardHeaders: "draft-8", legacyHeaders: false });
 const uploadLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false });
 const allowedEvents: AnalyticsEventName[] = ["artwork_impression", "artwork_opened", "artwork_liked", "basket_added", "basket_removed", "ar_started", "ar_camera_started", "ar_view_saved", "ar_view_shared", "signup_completed", "artist_profile_opened"];
 
@@ -131,6 +132,10 @@ const signupSchema = z.object({
   phone: z.string().trim().min(7, "Enter a valid phone number").max(25).regex(/^[+0-9()\-\s]+$/, "Enter a valid phone number"),
   role: z.enum(["buyer", "artist"]),
   consent: z.literal(true, { error: "Consent is required" }),
+}).strict();
+const existingAccountSchema = z.object({
+  name: z.string().trim().min(2).max(100),
+  phone: z.string().trim().min(7).max(25).regex(/^[+0-9()\-\s]+$/),
 }).strict();
 
 const profileSchema = z.object({
@@ -254,6 +259,23 @@ app.post("/api/auth/preview", authLimiter, async (request, response, next) => {
     const id = `preview-${role}`;
     const roles: Role[] = role === "admin" ? ["buyer", "artist", "admin"] : role === "artist" ? ["buyer", "artist"] : ["buyer"];
     const [user] = await db.insert(users).values({ telegramId: id, source: "preview", name: role === "admin" ? "ArtWall Admin" : role === "artist" ? "Demo Artist" : "Telegram Buyer", username: id, roles, bio: role !== "buyer" ? "Contemporary artist building a collection on ArtWall." : undefined, location: role !== "buyer" ? "Tashkent, Uzbekistan" : undefined }).onConflictDoUpdate({ target: users.telegramId, set: { roles, updatedAt: new Date() } }).returning();
+    response.json(issueSession(user));
+  } catch (error) { next(error); }
+});
+
+app.post("/api/auth/existing", existingAccountLimiter, async (request, response, next) => {
+  try {
+    const input = existingAccountSchema.parse(request.body);
+    const normalizedName = input.name.replace(/\s+/g, " ").toLowerCase();
+    const normalizedPhone = input.phone.replace(/\D/g, "");
+    const [user] = await db.select().from(users).where(and(
+      eq(users.source, "web"),
+      isNotNull(users.onboardingCompletedAt),
+      sql`lower(regexp_replace(trim(${users.name}), '[[:space:]]+', ' ', 'g')) = ${normalizedName}`,
+      sql`regexp_replace(coalesce(${users.phone}, ''), '[^0-9]', '', 'g') = ${normalizedPhone}`,
+      sql`NOT ('admin' = ANY(${users.roles}))`,
+    )).limit(1);
+    if (!user) throw new HttpError(401, "Account not found. Check your name and phone number.");
     response.json(issueSession(user));
   } catch (error) { next(error); }
 });

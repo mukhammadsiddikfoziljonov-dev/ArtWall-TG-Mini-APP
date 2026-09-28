@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { initialState } from "./seed";
-import { ApiError, api, authenticate, clearSession, getToken } from "./api";
+import { ApiError, api, authenticate, authenticateExisting, clearSession, getToken } from "./api";
 import type { AnalyticsEventName, Artwork, BasketItem, PlatformState, Role, SavedView, User } from "./types";
 
 const STORAGE_KEY = "artwall-mvp-v1";
@@ -32,6 +32,7 @@ type StoreValue = {
   updateProfile: (data: Partial<User>) => void;
   chooseRole: (role: "buyer" | "artist") => void;
   completeSignup: (data: { name: string; phone: string; role: "buyer" | "artist"; consent: true }) => Promise<{ ok: boolean; message?: string }>;
+  signInExisting: (data: { name: string; phone: string }) => Promise<{ ok: boolean; message?: string }>;
   toggleLike: (artworkId: string) => void;
   isLiked: (artworkId: string) => boolean;
   addToBasket: (artworkId: string) => void;
@@ -215,6 +216,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const signInExisting: StoreValue["signInExisting"] = async ({ name, phone }) => {
+    try {
+      await authenticateExisting(name, phone);
+      const refreshed = await api<{ user: User; state: PlatformState }>("/api/bootstrap");
+      setSessionUser(refreshed.user);
+      setState(refreshed.state);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : "Unable to sign in" };
+    }
+  };
+
   const track = (name: AnalyticsEventName, artworkId?: string) => {
     setState((previous) => {
       const event = { id: crypto.randomUUID(), name, userId: currentUser.id, artworkId, createdAt: new Date().toISOString() };
@@ -322,7 +335,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     void api("/api/views", { method: "POST", body: JSON.stringify({ artworkId, imageDataUrl }) }).catch(console.warn);
   };
 
-  return <StoreContext.Provider value={{ state, currentUser, isTelegram, authReady, authError, signOut, setDemoRole, updateProfile, chooseRole, completeSignup, toggleLike, isLiked, addToBasket, removeFromBasket, basket, createArtwork, deleteArtwork, updateArtwork, saveView, track }}>{children}</StoreContext.Provider>;
+  return <StoreContext.Provider value={{ state, currentUser, isTelegram, authReady, authError, signOut, setDemoRole, updateProfile, chooseRole, completeSignup, signInExisting, toggleLike, isLiked, addToBasket, removeFromBasket, basket, createArtwork, deleteArtwork, updateArtwork, saveView, track }}>{children}</StoreContext.Provider>;
 }
 
 export const useStore = () => {

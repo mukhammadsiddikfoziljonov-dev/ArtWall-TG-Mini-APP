@@ -36,6 +36,18 @@ export async function authenticate(role: "buyer" | "artist" | "admin") {
   return data;
 }
 
+export async function authenticateExisting(name: string, phone: string) {
+  const response = await fetch("/api/auth/existing", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, phone }),
+  });
+  if (!response.ok) throw new ApiError(response.status, (await response.json()).error || "Unable to sign in");
+  const data = await response.json();
+  localStorage.setItem(TOKEN_KEY, data.token);
+  return data;
+}
+
 export async function api<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const response = await fetch(path, {
