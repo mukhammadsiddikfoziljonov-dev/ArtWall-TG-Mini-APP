@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { initialState } from "./seed";
-import { api, authenticate } from "./api";
+import { ApiError, api, authenticate, getToken } from "./api";
 import type { AnalyticsEventName, Artwork, BasketItem, PlatformState, Role, SavedView, User } from "./types";
 
 const STORAGE_KEY = "artwall-mvp-v1";
@@ -102,11 +102,39 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    authenticate(demoRole)
-      .then((data: { user: User }) => {
-        if (!cancelled) setSessionUser(data.user);
-        return api<{ user: User; state: PlatformState }>("/api/bootstrap");
-      })
+    const fetchBootstrap = async () => {
+      let lastError: unknown;
+      for (const delay of [0, 1500, 4000]) {
+        if (delay) await new Promise((resolve) => window.setTimeout(resolve, delay));
+        try {
+          return await api<{ user: User; state: PlatformState }>("/api/bootstrap");
+        } catch (error) {
+          lastError = error;
+          // Authentication and validation failures need action rather than retries.
+          if (error instanceof ApiError && error.status < 500) throw error;
+        }
+      }
+      throw lastError;
+    };
+    const loadSession = async () => {
+      // Returning users already have a signed session. Bootstrapping it directly
+      // removes an entire authentication/database round trip from every app open.
+      if (getToken()) {
+        try {
+          return await fetchBootstrap();
+        } catch (error) {
+          // Only renew an expired or rejected session. Network/server failures are
+          // surfaced instead of starting a second slow request during a cold boot.
+          if (!(error instanceof ApiError) || error.status !== 401) throw error;
+        }
+      }
+
+      const authenticated = await authenticate(demoRole) as { user: User };
+      if (!cancelled) setSessionUser(authenticated.user);
+      return fetchBootstrap();
+    };
+
+    loadSession()
       .then((data) => {
         if (!cancelled) {
           setSessionUser(data.user);

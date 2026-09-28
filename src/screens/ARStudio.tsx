@@ -10,9 +10,9 @@ type Mode = "move" | "rotate" | "scale";
 type Panel = "size" | "frame" | "room" | null;
 
 const ROOM_PRESETS = [
-  { id: "living-room", name: "Living room", image: "/sample-rooms/living-room.jpeg" },
-  { id: "bedroom", name: "Bedroom", image: "/sample-rooms/bedroom.jpeg" },
-  { id: "office", name: "Office", image: "/sample-rooms/office.jpeg" },
+  { id: "living-room", name: "Living room", image: "/sample-rooms/living-room-web.jpeg", thumbnail: "/sample-rooms/living-room-thumb.jpeg" },
+  { id: "bedroom", name: "Bedroom", image: "/sample-rooms/bedroom-web.jpeg", thumbnail: "/sample-rooms/bedroom-thumb.jpeg" },
+  { id: "office", name: "Office", image: "/sample-rooms/office-web.jpeg", thumbnail: "/sample-rooms/office-thumb.jpeg" },
 ] as const;
 
 export function ARStudio({ artwork, language, onBack, demoMode = false }: { artwork: Artwork; language: Language; onBack: () => void; demoMode?: boolean }) {
@@ -249,7 +249,7 @@ export function ARStudio({ artwork, language, onBack, demoMode = false }: { artw
               <p className="mb-2 text-[10px] font-bold uppercase tracking-[.16em] text-stone-400">Sample rooms</p>
               <div className="grid grid-cols-3 gap-2">
                 {ROOM_PRESETS.map((room) => <button key={room.id} type="button" onClick={() => selectRoom(room)} aria-pressed={selectedRoom === room.id} className={`overflow-hidden rounded-2xl border bg-stone-50 text-left transition ${selectedRoom === room.id && !cameraActive ? "border-[#667b6e] ring-2 ring-[#667b6e]/20" : "border-stone-200"}`}>
-                  <img src={room.image} alt="" loading="lazy" className="h-20 w-full object-cover" />
+                  <img src={room.thumbnail} alt="" loading="lazy" decoding="async" className="h-20 w-full object-cover" />
                   <span className="flex items-center justify-between px-2.5 py-2 text-[10px] font-bold text-stone-700">{room.name}{selectedRoom === room.id && !cameraActive && <Check size={13} className="text-[#667b6e]" />}</span>
                 </button>)}
               </div>

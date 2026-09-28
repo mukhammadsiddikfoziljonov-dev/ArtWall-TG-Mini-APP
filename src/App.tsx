@@ -1,9 +1,8 @@
 import { Camera, Compass, Heart, ShoppingBag, UserRound } from "lucide-react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { AdminDashboard } from "./screens/AdminDashboard";
 import { ArtworkDetail } from "./screens/ArtworkDetail";
 import { ArtistStudio } from "./screens/ArtistStudio";
-import { ARStudio } from "./screens/ARStudio";
 import { Basket } from "./screens/Basket";
 import { Discover } from "./screens/Discover";
 import { Liked } from "./screens/Liked";
@@ -12,6 +11,8 @@ import { Signup } from "./screens/Signup";
 import { useStore } from "./store";
 import { t, type Language } from "./i18n";
 import type { Artwork } from "./types";
+
+const ARStudio = lazy(() => import("./screens/ARStudio").then((module) => ({ default: module.ARStudio })));
 
 type Tab = "discover" | "liked" | "basket" | "profile";
 type Overlay = "detail" | "ar" | "artist" | "admin" | null;
@@ -35,6 +36,41 @@ const demoArtwork: Artwork = {
   createdAt: new Date(0).toISOString(),
   stats: { views: 0, uniqueViewers: [], likes: 0, basketAdds: 0, arTries: 0, shares: 0 },
 };
+
+function StartupScreen({ ar = false }: { ar?: boolean }) {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => setElapsed(Date.now() - startedAt), 500);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const message = ar
+    ? "Opening your AR studio…"
+    : elapsed < 6000
+      ? "Preparing your gallery…"
+      : elapsed < 20000
+        ? "Starting the secure server…"
+        : "Almost ready — the free server is waking up…";
+  const progress = ar ? 72 : Math.min(92, 18 + elapsed / 650);
+
+  return <div className="relative grid min-h-[100dvh] overflow-hidden bg-[#f4f1ea] px-6">
+    <div className="startup-glow startup-glow-one" />
+    <div className="startup-glow startup-glow-two" />
+    <div className="relative z-10 m-auto w-full max-w-sm text-center">
+      <div className="mx-auto mb-8 grid h-20 w-20 place-items-center rounded-[28px] bg-[#24362e] text-white shadow-[0_22px_60px_rgba(36,54,46,.22)]">
+        <span className="font-serif text-4xl italic">A</span>
+      </div>
+      <p className="font-serif text-5xl italic tracking-tight text-[#20201d]">ArtWall</p>
+      <p className="mt-3 min-h-5 text-[10px] font-bold uppercase tracking-[.2em] text-stone-400">{message}</p>
+      <div className="mx-auto mt-7 h-1.5 max-w-[220px] overflow-hidden rounded-full bg-stone-200/80">
+        <div className="startup-progress h-full rounded-full bg-[#667b6e]" style={{ width: `${progress}%` }} />
+      </div>
+      {!ar && elapsed >= 20000 && <p className="mx-auto mt-5 max-w-[260px] text-xs leading-5 text-stone-500">Free hosting may need up to a minute after being idle. You can keep this window open.</p>}
+    </div>
+  </div>;
+}
 
 export default function App() {
   const { currentUser, basket, authReady, authError } = useStore();
@@ -63,11 +99,11 @@ export default function App() {
     else setOverlay(null);
   };
 
-  if (!authReady) return <div className="grid min-h-[100dvh] place-items-center bg-[#f4f1ea]"><div className="text-center"><p className="font-serif text-4xl italic">ArtWall</p><p className="mt-3 text-xs uppercase tracking-[.18em] text-stone-400">Preparing your AR demo…</p></div></div>;
+  if (!authReady) return <StartupScreen />;
   if (authError) return <div className="grid min-h-[100dvh] place-items-center bg-[#f4f1ea] p-6"><div className="max-w-sm rounded-[28px] bg-white p-6 text-center shadow-sm"><h1 className="font-serif text-3xl">Unable to sign in</h1><p className="mt-3 text-sm leading-6 text-stone-500">{authError}</p><button onClick={() => window.location.reload()} className="primary-button mt-5 w-full">Try again</button></div></div>;
   if (!currentUser.onboardingCompletedAt) return <Signup onComplete={openDemo} />;
 
-  if (selected && overlay === "ar") return <ARStudio artwork={selected} language={language} onBack={goBack} demoMode={selected.id === demoArtwork.id} />;
+  if (selected && overlay === "ar") return <Suspense fallback={<StartupScreen ar />}><ARStudio artwork={selected} language={language} onBack={goBack} demoMode={selected.id === demoArtwork.id} /></Suspense>;
   if (selected && overlay === "detail") return <ArtworkDetail artwork={selected} language={language} onBack={() => setOverlay(null)} onAR={() => openAR(selected)} />;
   if (overlay === "artist") return <ArtistStudio onBack={() => setOverlay(null)} onOpen={openArtwork} onAR={openAR} />;
   if (overlay === "admin" && currentUser.roles.includes("admin")) return <AdminDashboard onBack={() => setOverlay(null)} />;

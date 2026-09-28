@@ -3,6 +3,16 @@ const VISITOR_KEY = "artwall-visitor-id";
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export async function authenticate(role: "buyer" | "artist" | "admin") {
   const telegram = window.Telegram?.WebApp;
   const endpoint = telegram?.initData ? "/api/auth/telegram" : import.meta.env.DEV ? "/api/auth/preview" : "/api/auth/visitor";
@@ -15,7 +25,7 @@ export async function authenticate(role: "buyer" | "artist" | "admin") {
   }
   const body = telegram?.initData ? { initData: telegram.initData, requestedRole } : import.meta.env.DEV ? { role } : { visitorId };
   const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!response.ok) throw new Error((await response.json()).error || "Authentication failed");
+  if (!response.ok) throw new ApiError(response.status, (await response.json()).error || "Authentication failed");
   const data = await response.json();
   localStorage.setItem(TOKEN_KEY, data.token);
   return data;
@@ -29,7 +39,7 @@ export async function api<T = unknown>(path: string, options: RequestInit = {}):
   });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || `Request failed with ${response.status}`);
+    throw new ApiError(response.status, data.error || `Request failed with ${response.status}`);
   }
   return response.json();
 }

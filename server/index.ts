@@ -408,8 +408,15 @@ app.get("/api/admin/stats", auth, onboarded, async (request: AuthedRequest, resp
 
 if (config.nodeEnv === "production") {
   const dist = path.resolve(process.cwd(), "dist");
-  app.use(express.static(dist, { maxAge: "1h", index: false }));
-  app.get("*", (_request, response) => response.sendFile(path.join(dist, "index.html")));
+  app.use(express.static(dist, {
+    maxAge: "1h",
+    index: false,
+    setHeaders: (response, filePath) => {
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      else if (filePath.includes(`${path.sep}sample-rooms${path.sep}`)) response.setHeader("Cache-Control", "public, max-age=2592000");
+    },
+  }));
+  app.get("*", (_request, response) => response.sendFile(path.join(dist, "index.html"), { headers: { "Cache-Control": "no-cache" } }));
 }
 
 app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
