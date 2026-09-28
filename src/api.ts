@@ -3,6 +3,11 @@ const VISITOR_KEY = "artwall-visitor-id";
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 
+export const clearSession = (forgetVisitor = false) => {
+  localStorage.removeItem(TOKEN_KEY);
+  if (forgetVisitor) localStorage.removeItem(VISITOR_KEY);
+};
+
 export class ApiError extends Error {
   status: number;
 

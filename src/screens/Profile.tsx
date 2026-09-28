@@ -1,12 +1,13 @@
-import { BarChart3, ChevronRight, Edit3, Image, MapPin, Palette, ShieldCheck } from "lucide-react";
+import { BarChart3, ChevronRight, Edit3, Image, LogOut, MapPin, Palette, ShieldCheck, X } from "lucide-react";
 import { useState } from "react";
 import { useStore } from "../store";
 import { t, type Language } from "../i18n";
 import type { Role } from "../types";
 
 export function Profile({ language, onArtist, onAdmin }: { language: Language; onArtist: () => void; onAdmin: () => void }) {
-  const { currentUser, state, isTelegram, setDemoRole, updateProfile } = useStore();
+  const { currentUser, state, isTelegram, signOut, setDemoRole, updateProfile } = useStore();
   const [editing, setEditing] = useState(false);
+  const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   const [form, setForm] = useState({ name: currentUser.name, phone: currentUser.phone ?? "", bio: currentUser.bio ?? "", location: currentUser.location ?? "", social: currentUser.social ?? "" });
   const views = state.savedViews.filter((view) => view.userId === currentUser.id);
 
@@ -55,12 +56,24 @@ export function Profile({ language, onArtist, onAdmin }: { language: Language; o
         {currentUser.roles.includes("artist") && <button onClick={onArtist} className="menu-row"><span className="menu-icon bg-[#e7ded0] text-[#765c38]"><Palette size={18} /></span><span className="flex-1 text-left"><strong>{t(language, "artistStudio")}</strong><small>Manage profile and up to 5 artworks</small></span><ChevronRight size={18} /></button>}
         {currentUser.roles.includes("admin") && <button onClick={onAdmin} className="menu-row"><span className="menu-icon bg-[#dfe9df] text-[#355343]"><BarChart3 size={18} /></span><span className="flex-1 text-left"><strong>{t(language, "admin")}</strong><small>Platform activity and performance</small></span><ChevronRight size={18} /></button>}
         <div className="menu-row"><span className="menu-icon bg-[#ece7f4] text-[#625176]"><ShieldCheck size={18} /></span><span className="flex-1"><strong>{isTelegram ? "Telegram account" : "Browser demo access"}</strong><small>{isTelegram ? "Verified Telegram session" : "Signup verified for this device"}</small></span></div>
+        <button onClick={() => setConfirmingSignOut(true)} className="menu-row !text-red-700"><span className="menu-icon bg-red-50 text-red-600"><LogOut size={18} /></span><span className="flex-1 text-left"><strong>Sign out</strong><small>{isTelegram ? "Clear this ArtWall session" : "Use another account on this device"}</small></span><ChevronRight size={18} /></button>
       </div>
 
       <div className="mt-8">
         <div className="mb-3 flex items-center justify-between"><h2 className="font-serif text-2xl">{t(language, "savedViews")}</h2><span className="count-badge">{views.length}</span></div>
         {views.length ? <div className="grid grid-cols-2 gap-3">{views.map((view) => <img key={view.id} src={view.imageDataUrl} className="aspect-[4/5] w-full rounded-2xl object-cover" />)}</div> : <div className="empty-state py-10"><Image size={26} /><p>Your saved wall previews will appear here.</p></div>}
       </div>
+
+      {confirmingSignOut && <div className="fixed inset-0 z-50 grid place-items-end bg-black/35 p-4 backdrop-blur-sm sm:place-items-center" role="dialog" aria-modal="true" aria-labelledby="sign-out-title">
+        <section className="w-full max-w-sm rounded-[28px] bg-white p-5 shadow-2xl">
+          <div className="flex items-start justify-between gap-4">
+            <div><p className="eyebrow !text-red-600">Account session</p><h2 id="sign-out-title" className="mt-1 font-serif text-3xl">{isTelegram ? "Sign out of ArtWall?" : "Create another account?"}</h2></div>
+            <button onClick={() => setConfirmingSignOut(false)} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-stone-100 text-stone-500" aria-label="Cancel sign out"><X size={17} /></button>
+          </div>
+          <p className="mt-4 text-sm leading-6 text-stone-500">{isTelegram ? "ArtWall will clear its local session. Telegram will sign you back into the Telegram account currently open on this device; switch Telegram accounts first if you want to use another identity." : "Your current account and artworks stay safely stored. ArtWall will clear this device session and open a fresh signup for the next account."}</p>
+          <div className="mt-5 grid grid-cols-2 gap-2"><button onClick={() => setConfirmingSignOut(false)} className="secondary-button">Cancel</button><button onClick={signOut} className="flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-red-600 px-3 text-sm font-bold text-white"><LogOut size={17} />{isTelegram ? "Sign out" : "New account"}</button></div>
+        </section>
+      </div>}
     </div>
   );
 }

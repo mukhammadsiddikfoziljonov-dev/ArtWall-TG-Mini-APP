@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { initialState } from "./seed";
-import { ApiError, api, authenticate, getToken } from "./api";
+import { ApiError, api, authenticate, clearSession, getToken } from "./api";
 import type { AnalyticsEventName, Artwork, BasketItem, PlatformState, Role, SavedView, User } from "./types";
 
 const STORAGE_KEY = "artwall-mvp-v1";
@@ -27,6 +27,7 @@ type StoreValue = {
   isTelegram: boolean;
   authReady: boolean;
   authError: string;
+  signOut: () => void;
   setDemoRole: (role: Role) => void;
   updateProfile: (data: Partial<User>) => void;
   chooseRole: (role: "buyer" | "artist") => void;
@@ -177,6 +178,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setDemoRoleState(role);
   };
 
+  const signOut = () => {
+    // Telegram owns the identity inside a Mini App. Browser visitors receive a
+    // fresh visitor id so another person can complete signup on the same device.
+    clearSession(!isTelegram);
+    localStorage.removeItem(STORAGE_KEY);
+    window.location.reload();
+  };
+
   const updateProfile = (data: Partial<User>) => {
     setState((previous) => ({
       ...previous,
@@ -313,7 +322,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     void api("/api/views", { method: "POST", body: JSON.stringify({ artworkId, imageDataUrl }) }).catch(console.warn);
   };
 
-  return <StoreContext.Provider value={{ state, currentUser, isTelegram, authReady, authError, setDemoRole, updateProfile, chooseRole, completeSignup, toggleLike, isLiked, addToBasket, removeFromBasket, basket, createArtwork, deleteArtwork, updateArtwork, saveView, track }}>{children}</StoreContext.Provider>;
+  return <StoreContext.Provider value={{ state, currentUser, isTelegram, authReady, authError, signOut, setDemoRole, updateProfile, chooseRole, completeSignup, toggleLike, isLiked, addToBasket, removeFromBasket, basket, createArtwork, deleteArtwork, updateArtwork, saveView, track }}>{children}</StoreContext.Provider>;
 }
 
 export const useStore = () => {
