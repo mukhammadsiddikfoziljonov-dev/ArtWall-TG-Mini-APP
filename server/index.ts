@@ -381,6 +381,26 @@ app.patch("/api/artworks/:artworkId", auth, onboarded, async (request: AuthedReq
   } catch (error) { next(error); }
 });
 
+app.delete("/api/artworks/:artworkId", auth, onboarded, async (request: AuthedRequest, response, next) => {
+  try {
+    const artworkId = z.string().uuid().parse(request.params.artworkId);
+    const [existing] = await db.select().from(artworks).where(eq(artworks.id, artworkId)).limit(1);
+    if (!existing) throw new HttpError(404, "Artwork not found");
+    if (existing.artistId !== request.user!.id && !request.user!.roles.includes("admin")) throw new HttpError(403, "Not allowed");
+
+    const [mediaRows, viewRows] = await Promise.all([
+      db.select({ objectKey: artworkMedia.objectKey }).from(artworkMedia).where(eq(artworkMedia.artworkId, artworkId)),
+      db.select({ objectKey: savedViews.objectKey }).from(savedViews).where(eq(savedViews.artworkId, artworkId)),
+    ]);
+    await db.delete(artworks).where(eq(artworks.id, artworkId));
+
+    const objectKeys = [...mediaRows, ...viewRows].map((row) => row.objectKey).filter((key): key is string => Boolean(key));
+    const cleanup = await Promise.allSettled(objectKeys.map((key) => deleteImage(key)));
+    cleanup.forEach((result) => { if (result.status === "rejected") console.error("Artwork image cleanup failed", result.reason); });
+    response.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/views", auth, onboarded, uploadLimiter, async (request: AuthedRequest, response, next) => {
   let objectKey = "";
   try {

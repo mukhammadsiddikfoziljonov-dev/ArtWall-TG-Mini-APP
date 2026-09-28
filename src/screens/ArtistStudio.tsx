@@ -1,4 +1,4 @@
-import { ArrowLeft, BarChart3, Eye, Heart, ImagePlus, Plus, ShoppingBag, Sparkles } from "lucide-react";
+import { ArrowLeft, BarChart3, Eye, Heart, ImagePlus, Plus, ShoppingBag, Sparkles, Trash2, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { useStore } from "../store";
@@ -10,11 +10,14 @@ const blank = {
 };
 
 export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onOpen: (artwork: Artwork) => void; onAR: (artwork: Artwork) => void }) {
-  const { currentUser, state, createArtwork } = useStore();
+  const { currentUser, state, createArtwork, deleteArtwork } = useStore();
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(blank);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Artwork | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteMessage, setDeleteMessage] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const artworks = useMemo(() => state.artworks.filter((artwork) => artwork.artistId === currentUser.id), [state.artworks, currentUser.id]);
 
@@ -76,6 +79,19 @@ export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onO
     setCreating(false);
   };
 
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteMessage("");
+    const result = await deleteArtwork(deleteTarget.id);
+    setDeleting(false);
+    if (!result.ok) {
+      setDeleteMessage(result.message ?? "Unable to delete artwork.");
+      return;
+    }
+    setDeleteTarget(null);
+  };
+
   const totals = artworks.reduce((sum, artwork) => ({
     views: sum.views + artwork.stats.views,
     likes: sum.likes + artwork.stats.likes,
@@ -115,7 +131,7 @@ export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onO
                   <div className="flex items-center justify-between gap-2"><span className={`rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-wider ${artwork.status === "published" ? "bg-[#dfe9df] text-[#355343]" : "bg-stone-100 text-stone-500"}`}>{artwork.status}</span><span className="text-xs text-stone-400">{artwork.stats.views} views</span></div>
                   <h3 className="mt-2 truncate font-serif text-xl">{artwork.title}</h3>
                   <p className="text-xs text-stone-500">{artwork.medium} · ${artwork.price}</p>
-                  <div className="mt-3 flex gap-2"><button onClick={() => onOpen(artwork)} className="mini-button">Preview</button><button onClick={() => onAR(artwork)} className="mini-button">Create view</button></div>
+                  <div className="mt-3 flex gap-2"><button onClick={() => onOpen(artwork)} className="mini-button">Preview</button><button onClick={() => onAR(artwork)} className="mini-button">Create view</button><button onClick={() => { setDeleteMessage(""); setDeleteTarget(artwork); }} className="ml-auto grid h-8 w-8 place-items-center rounded-xl bg-red-50 text-red-600 transition active:scale-95" aria-label={`Delete ${artwork.title}`}><Trash2 size={15} /></button></div>
                 </div>
               </article>
             ))}
@@ -142,6 +158,18 @@ export function ArtistStudio({ onBack, onOpen, onAR }: { onBack: () => void; onO
           <div className="mt-5 grid grid-cols-2 gap-2"><button disabled={saving} onClick={() => void submit("draft")} className="secondary-button disabled:opacity-50">{saving ? "Saving…" : "Save draft"}</button><button disabled={saving} onClick={() => void submit("published")} className="primary-button disabled:opacity-50">{saving ? "Saving…" : "Publish"}</button></div>
         </section>
       )}
+
+      {deleteTarget && <div className="fixed inset-0 z-50 grid place-items-end bg-black/35 p-4 backdrop-blur-sm sm:place-items-center" role="dialog" aria-modal="true" aria-labelledby="delete-artwork-title">
+        <section className="w-full max-w-sm rounded-[28px] bg-white p-5 shadow-2xl">
+          <div className="flex items-start justify-between gap-4">
+            <div><p className="eyebrow !text-red-600">Delete artwork</p><h2 id="delete-artwork-title" className="mt-1 font-serif text-3xl">Remove “{deleteTarget.title}”?</h2></div>
+            <button onClick={() => !deleting && setDeleteTarget(null)} disabled={deleting} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-stone-100 text-stone-500 disabled:opacity-40" aria-label="Cancel deletion"><X size={17} /></button>
+          </div>
+          <p className="mt-4 text-sm leading-6 text-stone-500">This removes the listing from the marketplace, buyer likes and baskets, saved AR views, and its uploaded image. This cannot be undone.</p>
+          {deleteMessage && <p className="mt-3 rounded-2xl bg-red-50 p-3 text-sm text-red-700">{deleteMessage}</p>}
+          <div className="mt-5 grid grid-cols-2 gap-2"><button onClick={() => setDeleteTarget(null)} disabled={deleting} className="secondary-button disabled:opacity-50">Keep artwork</button><button onClick={() => void confirmDelete()} disabled={deleting} className="flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 text-sm font-bold text-white disabled:opacity-50"><Trash2 size={17} />{deleting ? "Deleting…" : "Delete"}</button></div>
+        </section>
+      </div>}
     </div>
   );
 }

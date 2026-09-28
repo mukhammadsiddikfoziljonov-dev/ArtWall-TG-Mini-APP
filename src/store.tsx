@@ -37,6 +37,7 @@ type StoreValue = {
   removeFromBasket: (artworkId: string) => void;
   basket: BasketItem[];
   createArtwork: (artwork: Omit<Artwork, "id" | "artistId" | "artistName" | "createdAt" | "stats">) => Promise<{ ok: boolean; message?: string }>;
+  deleteArtwork: (artworkId: string) => Promise<{ ok: boolean; message?: string }>;
   updateArtwork: (artworkId: string, data: Partial<Artwork>) => void;
   saveView: (artworkId: string, imageDataUrl: string) => void;
   track: (name: AnalyticsEventName, artworkId?: string) => void;
@@ -285,6 +286,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     void api(`/api/artworks/${artworkId}`, { method: "PATCH", body: JSON.stringify(data) }).catch(console.warn);
   };
 
+  const deleteArtwork: StoreValue["deleteArtwork"] = async (artworkId) => {
+    try {
+      await api(`/api/artworks/${artworkId}`, { method: "DELETE" });
+      setState((previous) => ({
+        ...previous,
+        artworks: previous.artworks.filter((artwork) => artwork.id !== artworkId),
+        likes: Object.fromEntries(Object.entries(previous.likes).map(([userId, artworkIds]) => [userId, artworkIds.filter((id) => id !== artworkId)])),
+        baskets: Object.fromEntries(Object.entries(previous.baskets).map(([userId, items]) => [userId, items.filter((item) => item.artworkId !== artworkId)])),
+        savedViews: previous.savedViews.filter((view) => view.artworkId !== artworkId),
+        events: previous.events.map((event) => event.artworkId === artworkId ? { ...event, artworkId: undefined } : event),
+      }));
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : "Unable to delete artwork." };
+    }
+  };
+
   const saveView = (artworkId: string, imageDataUrl: string) => {
     const view: SavedView = { id: crypto.randomUUID(), userId: currentUser.id, artworkId, imageDataUrl, createdAt: new Date().toISOString() };
     setState((previous) => ({
@@ -295,7 +313,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     void api("/api/views", { method: "POST", body: JSON.stringify({ artworkId, imageDataUrl }) }).catch(console.warn);
   };
 
-  return <StoreContext.Provider value={{ state, currentUser, isTelegram, authReady, authError, setDemoRole, updateProfile, chooseRole, completeSignup, toggleLike, isLiked, addToBasket, removeFromBasket, basket, createArtwork, updateArtwork, saveView, track }}>{children}</StoreContext.Provider>;
+  return <StoreContext.Provider value={{ state, currentUser, isTelegram, authReady, authError, setDemoRole, updateProfile, chooseRole, completeSignup, toggleLike, isLiked, addToBasket, removeFromBasket, basket, createArtwork, deleteArtwork, updateArtwork, saveView, track }}>{children}</StoreContext.Provider>;
 }
 
 export const useStore = () => {
